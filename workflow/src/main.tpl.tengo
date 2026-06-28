@@ -1,0 +1,327 @@
+// Deep Mutational Scanning — workflow.
+//
+// Heat map 1 precalc. The profiler emits the per-variant state matrix
+// [variantKey, parentId, position] -> state and per-sample abundance
+// [sampleId, variantKey] -> count. This block collapses the variant axis: for each
+// (parentId, position, state) cell it aggregates over the variants carrying state
+// `s` at position `p`.
+//
+// Two value modes:
+//   abundance — cell = SUM of per-variant abundance.
+//   property  — cell = MEAN of a per-variant property (e.g. a Tite-Seq Kd).
+//
+// Live filter + baseline-vs-filtered: the variant subset is filtered BEFORE
+// aggregation (by sample/round and/or per-variant property range); the precalc
+// emits an "All variants" baseline and a "Filtered" facet, keyed by `subset`.
+// Changing the filter (a block arg) re-runs this workflow. Output:
+// [subset, parentId, position, state] -> heatmapValue, for GraphMaker
+// (X=position, Y=state, tab=parent, facet=subset).
+
+wf := import("@platforma-sdk/workflow-tengo:workflow")
+xsv := import("@platforma-sdk/workflow-tengo:pframes.xsv")
+pframes := import("@platforma-sdk/workflow-tengo:pframes")
+pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
+pt := import("@platforma-sdk/workflow-tengo:pt")
+
+// Join keys must stay byte-identical to the profiler's emitted axis names.
+VARIANT_KEY_AXIS := "pl7.app/variantKey"
+PARENT_ID_AXIS := "pl7.app/repertoire/parentId"
+POSITION_AXIS := "pl7.app/repertoire/position"
+SAMPLE_ID_AXIS := "pl7.app/sampleId"
+
+wf.prepare(func(args) {
+	bb := wf.createPBundleBuilder()
+	bb.ignoreMissingDomains()
+	// State matrix as the anchor — lets anchored property ids resolve.
+	bb.addAnchor("main", args.stateMatrixRef)
+	if !is_undefined(args.abundanceRef) {
+		bb.addSingle(args.abundanceRef, "abundance")
+	}
+	// Per-variant property used as the cell value (property mode).
+	if args.valueMode == "property" && !is_undefined(args.propertyRef) {
+		bb.addSingle(args.propertyRef, "valueProperty")
+	}
+	// Per-variant property used to filter the subset (property-range filter).
+	if !is_undefined(args.filter) && !is_undefined(args.filter.propertyRef) {
+		bb.addSingle(args.filter.propertyRef, "filterProperty")
+	}
+	return {
+		columns: bb.build()
+	}
+})
+
+wf.body(func(args) {
+	valueMode := args.valueMode
+	// Each mode needs its value source; bail out (no heat map) until it is selected.
+	if valueMode == "abundance" && is_undefined(args.abundanceRef) {
+		return { outputs: {}, exports: {} }
+	}
+	if valueMode == "property" && is_undefined(args.propertyRef) {
+		return { outputs: {}, exports: {} }
+	}
+
+	normalized := valueMode == "abundance" && args.normalize
+
+	columns := args.columns
+	stateSpec := columns.getSpec(args.stateMatrixRef)
+	stateCol := columns.getColumn(args.stateMatrixRef)
+
+	// State-matrix axes, in emitted order [variantKey, parentId, position].
+	parentAxisSpec := stateSpec.axesSpec[1]
+	positionAxisSpec := stateSpec.axesSpec[2]
+	alphabet := positionAxisSpec.domain["pl7.app/alphabet"]
+
+	// --- Resolve the active filter (drives the "Filtered" facet) ---
+	filter := args.filter
+	sampleSel := []
+	if !is_undefined(filter) && !is_undefined(filter.sampleSelection) {
+		sampleSel = filter.sampleSelection
+	}
+	hasSampleFilter := len(sampleSel) > 0
+
+	propMin := undefined
+	propMax := undefined
+	hasPropFilter := false
+	if !is_undefined(filter) && !is_undefined(filter.propertyRef) && !is_undefined(filter.range) {
+		propMin = filter.range[0]
+		propMax = filter.range[1]
+		hasPropFilter = !is_undefined(propMin) || !is_undefined(propMax)
+	}
+	filterActive := hasSampleFilter || hasPropFilter
+
+	// --- Shared frames ---
+	smTable := pframes.tsvFileBuilder()
+	smTable.mem("16GiB") // @TODO scale with input size
+	smTable.cpu(4)
+	smTable.setAxisHeader(VARIANT_KEY_AXIS, "variantKey")
+	smTable.setAxisHeader(PARENT_ID_AXIS, "parentId")
+	smTable.setAxisHeader(POSITION_AXIS, "position")
+	smTable.add(stateCol, { header: "state" })
+	smTsv := smTable.build()
+
+	ptWf := pt.workflow().
+		mem("16GiB").
+		cpu(4)
+
+	smDf := ptWf.frame(smTsv, { xsvType: "tsv" })
+
+	abDf := undefined
+	if !is_undefined(args.abundanceRef) {
+		abTable := pframes.tsvFileBuilder()
+		abTable.mem("16GiB")
+		abTable.cpu(4)
+		abTable.setAxisHeader(SAMPLE_ID_AXIS, "sampleId")
+		abTable.setAxisHeader(VARIANT_KEY_AXIS, "variantKey")
+		abTable.add(columns.getColumn("abundance"), { header: "abundance" })
+		abDf = ptWf.frame(abTable.build(), { xsvType: "tsv" })
+	}
+
+	// Value-mode property frame [variantKey -> variantValue] (property mode).
+	valuePropDf := undefined
+	if valueMode == "property" {
+		vpTable := pframes.tsvFileBuilder()
+		vpTable.mem("8GiB")
+		vpTable.cpu(2)
+		vpTable.setAxisHeader(VARIANT_KEY_AXIS, "variantKey")
+		vpTable.add(columns.getColumn("valueProperty"), { header: "vProp" })
+		valuePropDf = ptWf.frame(vpTable.build(), { xsvType: "tsv" }).
+			select(pt.col("variantKey"), pt.col("vProp").alias("variantValue"))
+	}
+
+	// Sample-selection predicate (OR-chain — pt has no list-membership operator).
+	sampleExpr := undefined
+	if hasSampleFilter {
+		sampleExpr = pt.col("sampleId").eq(pt.lit(sampleSel[0]))
+		for i := 1; i < len(sampleSel); i++ {
+			sampleExpr = sampleExpr.or(pt.col("sampleId").eq(pt.lit(sampleSel[i])))
+		}
+	}
+
+	// Variants passing the property-range filter (shared by both value modes).
+	keptByProperty := undefined
+	if hasPropFilter {
+		fpTable := pframes.tsvFileBuilder()
+		fpTable.mem("8GiB")
+		fpTable.cpu(2)
+		fpTable.setAxisHeader(VARIANT_KEY_AXIS, "variantKey")
+		fpTable.add(columns.getColumn("filterProperty"), { header: "fProp" })
+		k := ptWf.frame(fpTable.build(), { xsvType: "tsv" })
+		if !is_undefined(propMin) {
+			k = k.filter(pt.col("fProp").ge(pt.lit(propMin)))
+		}
+		if !is_undefined(propMax) {
+			k = k.filter(pt.col("fProp").le(pt.lit(propMax)))
+		}
+		keptByProperty = k.select(pt.col("variantKey"))
+	}
+
+	// Per-variant value frame [variantKey -> variantValue]. `applyFilter` toggles
+	// the subset filter (false = baseline, true = filtered facet).
+	buildVariantValue := func(applyFilter) {
+		if valueMode == "abundance" {
+			df := abDf
+			// Sample filter changes the abundance value (sum over selected samples)
+			// and the variant set at once.
+			if applyFilter && !is_undefined(sampleExpr) {
+				df = df.filter(sampleExpr)
+			}
+			vv := df.groupBy("variantKey").agg(pt.col("abundance").sum().alias("variantValue"))
+			if applyFilter && !is_undefined(keptByProperty) {
+				vv = vv.join(keptByProperty, { leftOn: ["variantKey"], rightOn: ["variantKey"], how: "inner" })
+			}
+			return vv
+		}
+		// Property mode: value is the per-variant property (sample-independent).
+		// The filter only restricts which variants are included.
+		vv := valuePropDf
+		if applyFilter {
+			if !is_undefined(keptByProperty) {
+				vv = vv.join(keptByProperty, { leftOn: ["variantKey"], rightOn: ["variantKey"], how: "inner" })
+			}
+			// Sample filter restricts to variants observed in the selected samples
+			// (only possible when an abundance column is present).
+			if !is_undefined(sampleExpr) && !is_undefined(abDf) {
+				observed := abDf.filter(sampleExpr).
+					groupBy("variantKey").
+					agg(pt.col("abundance").count().alias("_n")).
+					select(pt.col("variantKey"))
+				vv = vv.join(observed, { leftOn: ["variantKey"], rightOn: ["variantKey"], how: "inner" })
+			}
+		}
+		return vv
+	}
+
+	// Collapse a per-variant value frame to [parentId, position, state] and tag the
+	// subset facet. Inner join drops variants with no value.
+	aggregateCells := func(variantValueDf, subsetLabel) {
+		grouped := smDf.join(variantValueDf, { leftOn: ["variantKey"], rightOn: ["variantKey"], how: "inner" }).
+			groupBy("parentId", "position", "state")
+		agg := undefined
+		if valueMode == "abundance" {
+			agg = grouped.agg(pt.col("variantValue").sum().alias("cellValue"))
+		} else {
+			agg = grouped.agg(pt.col("variantValue").mean().alias("cellValue"))
+		}
+		return agg.withColumns(pt.lit(subsetLabel).alias("subset"))
+	}
+
+	aggAll := aggregateCells(buildVariantValue(false), "All variants")
+	resultDf := aggAll
+	if filterActive {
+		aggFilt := aggregateCells(buildVariantValue(true), "Filtered")
+		resultDf = pt.concat([aggAll, aggFilt])
+	}
+
+	// Normalize each cell by its (subset, parentId, position) column total → state
+	// frequency. Each position column then sums to 1 within a facet — the canonical
+	// enrichment readout.
+	if normalized {
+		resultDf = resultDf.withColumns(
+			pt.col("cellValue").
+				truediv(pt.col("cellValue").sum().over(["subset", "parentId", "position"])).
+				alias("cellValue")
+		)
+	}
+
+	resultDf.save("stateHeatmap.tsv")
+	ptResult := ptWf.run()
+
+	// --- Value column spec, mode-dependent (name stays mode-neutral so the UI
+	// finds it either way) ---
+	valueAnnotations := undefined
+	if valueMode == "property" {
+		propLabel := "property"
+		vSpec := columns.getSpec("valueProperty")
+		if !is_undefined(vSpec) && !is_undefined(vSpec.annotations) && !is_undefined(vSpec.annotations["pl7.app/label"]) {
+			propLabel = vSpec.annotations["pl7.app/label"]
+		}
+		valueAnnotations = {
+			"pl7.app/label": "Mean " + propLabel
+		}
+	} else if normalized {
+		valueAnnotations = {
+			"pl7.app/isAbundance": "true",
+			"pl7.app/abundance/aggregated": "true",
+			"pl7.app/abundance/normalized": "true",
+			"pl7.app/label": "State frequency",
+			"pl7.app/format": ".2p"
+		}
+	} else {
+		valueAnnotations = {
+			"pl7.app/isAbundance": "true",
+			"pl7.app/abundance/aggregated": "true",
+			"pl7.app/label": "Aggregated abundance"
+		}
+	}
+
+	// --- Import back: [subset, parentId, position, state] -> heatmapValue ---
+	// parentId / position inherited verbatim from the profiler; subset and state
+	// are block-local axes (terminal output — rendered by GraphMaker, not joined).
+	heatmapCols := xsv.importFile(
+		ptResult.getFile("stateHeatmap.tsv"),
+		"tsv",
+		{
+			axes: [
+				{
+					column: "subset",
+					spec: {
+						name: "pl7.app/repertoire/heatmapSubset",
+						type: "String",
+						annotations: {
+							"pl7.app/label": "Subset"
+						}
+					}
+				},
+				{ column: "parentId", spec: parentAxisSpec },
+				{ column: "position", spec: positionAxisSpec },
+				{
+					column: "state",
+					spec: {
+						name: "pl7.app/repertoire/state",
+						type: "String",
+						domain: {
+							"pl7.app/alphabet": alphabet
+						},
+						annotations: {
+							"pl7.app/label": "State",
+							"pl7.app/table/fontFamily": "monospace"
+						}
+					}
+				}
+			],
+			columns: [{
+				column: "cellValue",
+				spec: {
+					name: "pl7.app/repertoire/heatmapValue",
+					valueType: "Double",
+					domain: {
+						"pl7.app/alphabet": alphabet
+					},
+					annotations: valueAnnotations
+				}
+			}],
+			storageFormat: "Parquet",
+			partitionKeyLength: 0
+		},
+		{ splitDataAndSpec: true }
+	)
+
+	trace := pSpec.makeTrace(stateSpec, {
+		type: "milaboratories.repertoire-mutation-heatmap",
+		importance: 50,
+		label: "Deep Mutational Scanning"
+	})
+
+	pf := pframes.pFrameBuilder()
+	for k, v in heatmapCols {
+		pf.add(k, trace.inject(v.spec), v.data)
+	}
+	stateHeatmapPf := pf.build()
+
+	return {
+		outputs: {
+			stateHeatmapPf: pframes.exportFrame(stateHeatmapPf)
+		},
+		exports: {}
+	}
+})

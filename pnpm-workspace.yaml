@@ -1,0 +1,22 @@
+packages:
+  - block
+  - model
+  - test
+  - ui
+  - workflow
+catalog:
+  "@platforma-sdk/model": 1.79.17
+  "@platforma-sdk/ui-vue": 1.79.17
+  "@milaboratories/graph-maker": 1.4.8
+  "@platforma-sdk/workflow-tengo": 6.6.5
+  "@platforma-sdk/test": 1.79.18
+  "@platforma-sdk/block-tools": 2.11.2
+  "@platforma-sdk/tengo-builder": 4.0.9
+  "@platforma-sdk/package-builder": 3.13.0
+  "@milaboratories/ts-builder": 1.5.2
+  "@milaboratories/ts-configs": 1.2.3
+  turbo: ~2.8.11
+  shx: ~0.4.0
+  "@changesets/cli": ~2.29.8
+  vitest: ~4.0.18
+  vue: 3.5.24
