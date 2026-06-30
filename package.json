@@ -1,0 +1,31 @@
+{
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "fmt": "turbo run fmt",
+    "check": "turbo run check",
+    "build": "turbo run build",
+    "build:dev": "env PL_PKG_DEV=local turbo run build",
+    "test": "env PL_PKG_DEV=local turbo run test --concurrency 1",
+    "test:dry-run": "env PL_PKG_DEV=local turbo run test --dry-run=json",
+    "mark-stable": "turbo run mark-stable",
+    "do-pack": "turbo run do-pack",
+    "watch": "turbo watch build",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "update-sdk": "block-tools structure refresh --update-deps-only",
+    "upgrade-sdk": "block-tools structure refresh --update-deps-only && pnpm i && block-tools structure refresh && pnpm i && pnpm fmt"
+  },
+  "devDependencies": {
+    "@changesets/cli": "catalog:",
+    "@milaboratories/ts-builder": "catalog:",
+    "@platforma-sdk/block-tools": "catalog:",
+    "shx": "catalog:",
+    "turbo": "catalog:"
+  },
+  "peerDependencies": {
+    "oxfmt": "*",
+    "oxlint": "*"
+  },
+  "packageManager": "pnpm@9.12.0"
+}

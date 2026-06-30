@@ -1,0 +1,62 @@
+{
+  "name": "@platforma-open/milaboratories.repertoire-mutation-heatmap.block",
+  "version": "1.0.0",
+  "files": [
+    "dist",
+    "block-pack"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "sources": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "ts-builder build --target block-facade && block-tools pack",
+    "prepublishOnly": "block-tools publish --unstable -r s3://milab-euce1-prod-pkgs-s3-block-registry/pub/releases/?region=eu-central-1 --registry-serve-url https://blocks.pl-open.science",
+    "do-pack": "pnpm pack && shx mv *.tgz package.tgz",
+    "check": "ts-builder type-check --target block-facade"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@milaboratories/ts-builder": "catalog:",
+    "@milaboratories/ts-configs": "catalog:",
+    "@platforma-open/milaboratories.repertoire-mutation-heatmap.model": "workspace:*",
+    "@platforma-open/milaboratories.repertoire-mutation-heatmap.ui": "workspace:*",
+    "@platforma-open/milaboratories.repertoire-mutation-heatmap.workflow": "workspace:*",
+    "@platforma-sdk/block-tools": "catalog:",
+    "@platforma-sdk/model": "catalog:",
+    "shx": "catalog:",
+    "typescript": "catalog:"
+  },
+  "block": {
+    "components": {
+      "workflow": "@platforma-open/milaboratories.repertoire-mutation-heatmap.workflow/dist/tengo/tpl/main.plj.gz",
+      "model": "@platforma-open/milaboratories.repertoire-mutation-heatmap.model/dist/model.json",
+      "ui": "@platforma-open/milaboratories.repertoire-mutation-heatmap.ui/dist"
+    },
+    "meta": {
+      "title": "Deep Mutational Scanning",
+      "logo": "file:logos/block-logo.png",
+      "url": "https://github.com/platforma-open/repertoire-mutation-heatmap",
+      "support": "mailto:support@milaboratories.com",
+      "description": "Visualizes deep mutational scanning libraries as position × residue mutation-enrichment heatmaps over a live-filtered variant subset, plus a known-variant × sample abundance heatmap.",
+      "longDescription": "file:docs/description.md",
+      "tags": [
+        "downstream",
+        "dms",
+        "antibody"
+      ],
+      "organization": {
+        "name": "MiLaboratories Inc",
+        "url": "https://milaboratories.com/",
+        "logo": "file:logos/organization-logo.png"
+      }
+    }
+  }
+}
