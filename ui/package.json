@@ -1,6 +1,7 @@
 {
   "name": "@platforma-open/milaboratories.repertoire-mutation-heatmap.ui",
   "version": "1.0.0",
+  "private": true,
   "type": "module",
   "scripts": {
     "fmt": "ts-builder format",

@@ -1,6 +1,7 @@
 {
   "name": "@platforma-open/milaboratories.repertoire-mutation-heatmap.workflow",
   "version": "1.0.0",
+  "private": true,
   "type": "module",
   "scripts": {
     "build": "shx rm -rf dist && pl-tengo build",
