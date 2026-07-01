@@ -4,7 +4,7 @@ import type {
   Alphabet,
   VariantFilter,
 } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
-import type { PObjectId } from "@platforma-sdk/model";
+import type { PObjectId, SUniversalPColumnId } from "@platforma-sdk/model";
 import { getSingleColumnData } from "@platforma-sdk/model";
 import {
   PlAccordionSection,
@@ -13,6 +13,7 @@ import {
   PlDropdown,
   PlDropdownMulti,
   PlDropdownRef,
+  PlElementList,
   PlNumberField,
   PlTooltip,
 } from "@platforma-sdk/ui-vue";
@@ -26,12 +27,14 @@ const valueModeOptions: { label: string; value: ValueMode }[] = [
   { label: "Property", value: "property" },
 ];
 
-const levelOptions: { label: string; value: Alphabet }[] = [
-  { label: "Amino acid", value: "aminoacid" },
-  { label: "Nucleotide", value: "nucleotide" },
-];
-
 const filterOpen = ref(false);
+const compositionOpen = ref(false);
+
+// Human label for a selected round-frequency column, from the discovery options.
+function roundLabel(ref: SUniversalPColumnId): string {
+  const opts = app.model.outputs.roundFrequencyOptions ?? [];
+  return opts.find((o) => o.value === ref)?.label ?? String(ref);
+}
 
 // Replace the whole filter object on every edit (data is persisted server-side;
 // keep writes immutable rather than mutating nested fields in place).
@@ -141,7 +144,18 @@ watch(
     </template>
   </PlTooltip>
 
-  <PlBtnGroup v-model="app.model.data.level" :options="levelOptions" label="Level" />
+  <PlDropdownRef
+    v-model="app.model.data.knownAbundanceRef"
+    :options="app.model.outputs.knownAbundanceOptions"
+    label="Known-variant abundance"
+    clearable
+  >
+    <template #tooltip>
+      How abundant each known variant (the designed set you supplied to the Amplicon Repertoire
+      Profiling block) is in each sample. Adds the "Known Variants" heatmap. Optional — leave empty
+      if your run had no known set.
+    </template>
+  </PlDropdownRef>
 
   <!-- Subset filter: a filtered facet shown beside the unfiltered baseline. -->
   <PlAccordionSection v-model="filterOpen" label="Subset filter (vs baseline)">
@@ -190,16 +204,34 @@ watch(
     />
   </PlAccordionSection>
 
-  <PlDropdownRef
-    v-model="app.model.data.knownAbundanceRef"
-    :options="app.model.outputs.knownAbundanceOptions"
-    label="Known-variant abundance"
-    clearable
-  >
-    <template #tooltip>
-      How abundant each known variant (the designed set you supplied to the Amplicon Repertoire
-      Profiling block) is in each sample. Adds the "Known Variants" heatmap. Optional — leave empty
-      if your run had no known set.
-    </template>
-  </PlDropdownRef>
+  <!-- Composition-enrichment view: positional log2 fold change across selection rounds. -->
+  <PlAccordionSection v-model="compositionOpen" label="Composition enrichment (across rounds)">
+    <PlDropdownMulti
+      :model-value="app.model.data.roundFrequencyRefs"
+      :options="app.model.outputs.roundFrequencyOptions ?? []"
+      label="Round frequencies (from Enrichment)"
+      clearable
+      @update:model-value="(v: SUniversalPColumnId[]) => (app.model.data.roundFrequencyRefs = v)"
+    >
+      <template #tooltip>
+        Per-round, per-variant frequency columns exported by an upstream Enrichment block. Pick the
+        rounds to compare; the heatmap shows, per position and residue, the log2 fold change of the
+        residue composition in each round versus the baseline round. Adds the "Composition
+        Enrichment" page.
+      </template>
+    </PlDropdownMulti>
+
+    <PlElementList
+      v-if="app.model.data.roundFrequencyRefs.length > 0"
+      v-model:items="app.model.data.roundFrequencyRefs"
+    >
+      <template #item-title="{ item }">{{ roundLabel(item) }}</template>
+    </PlElementList>
+    <div
+      v-if="app.model.data.roundFrequencyRefs.length > 0"
+      style="font-size: 12px; color: #888; margin-top: -8px"
+    >
+      The first round is the baseline (R0); drag to reorder.
+    </div>
+  </PlAccordionSection>
 </template>

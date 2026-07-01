@@ -32,9 +32,13 @@ SAMPLE_ID_AXIS := "pl7.app/sampleId"
 wf.prepare(func(args) {
 	bb := wf.createPBundleBuilder()
 	bb.ignoreMissingDomains()
-	// State matrix as the anchor — lets anchored property ids resolve.
+	// State matrix as the anchor — lets profiler-keyed property ids resolve.
 	bb.addAnchor("main", args.stateMatrixRef)
 	if !is_undefined(args.abundanceRef) {
+		// Abundance anchor for enrichment/abundance-keyed columns (round frequencies and
+		// enrichment-derived properties), discovered via findColumns on the abundance axis.
+		// The name must match the model's discovery anchors.
+		bb.addAnchor("freqAnchor", args.abundanceRef)
 		bb.addSingle(args.abundanceRef, "abundance")
 	}
 	// Per-variant property used as the cell value (property mode).
@@ -44,6 +48,14 @@ wf.prepare(func(args) {
 	// Per-variant property used to filter the subset (property-range filter).
 	if !is_undefined(args.filter) && !is_undefined(args.filter.propertyRef) {
 		bb.addSingle(args.filter.propertyRef, "filterProperty")
+	}
+	// Per-round frequency columns from the enrichment block (composition-enrichment view).
+	// Anchored on the abundance ref (freqAnchor, added above); ids come from findColumns and
+	// are added without a query key, retrieved by the ref itself in the body.
+	if !is_undefined(args.abundanceRef) && !is_undefined(args.roundFrequencyRefs) && len(args.roundFrequencyRefs) >= 2 {
+		for ref in args.roundFrequencyRefs {
+			bb.addSingle(ref)
+		}
 	}
 	return {
 		columns: bb.build()
@@ -224,6 +236,88 @@ wf.body(func(args) {
 	}
 
 	resultDf.save("stateHeatmap.tsv")
+
+	// --- Composition-enrichment precalc (optional) ---
+	// Positional composition shift across rounds: log2(round fraction / baseline fraction),
+	// on the per-position composition frequency (A-0019). Consumes the enrichment block's
+	// per-round per-variant frequency columns. Round identity comes from each column's
+	// `pl7.app/enrichment/condition` domain; round order (baseline = first) from the args
+	// array. Frequencies are fractions, so zeros are guarded by a small epsilon, not a
+	// count pseudocount.
+	// Need at least two rounds: one baseline plus one comparison. With a single round the
+	// baseline is filtered out below, leaving an empty result — so gate it out entirely.
+	roundRefs := args.roundFrequencyRefs
+	hasComposition := !is_undefined(roundRefs) && len(roundRefs) >= 2
+	if hasComposition {
+		eps := args.compositionEpsilon
+
+		// Long per-round frequency frame [variantKey, round, freq].
+		roundFrames := []
+		baselineRound := undefined
+		for i, ref in roundRefs {
+			rSpec := columns.getSpec(ref)
+			roundId := string(i)
+			if !is_undefined(rSpec) && !is_undefined(rSpec.domain) && !is_undefined(rSpec.domain["pl7.app/enrichment/condition"]) {
+				roundId = rSpec.domain["pl7.app/enrichment/condition"]
+			}
+			if is_undefined(baselineRound) {
+				baselineRound = roundId
+			}
+			rTable := pframes.tsvFileBuilder()
+			rTable.mem("8GiB")
+			rTable.cpu(2)
+			rTable.setAxisHeader(VARIANT_KEY_AXIS, "variantKey")
+			rTable.add(columns.getColumn(ref), { header: "freq" })
+			rDf := ptWf.frame(rTable.build(), { xsvType: "tsv" }).
+				withColumns(pt.lit(roundId).alias("round"))
+			roundFrames = roundFrames + [rDf]
+		}
+		freqDf := roundFrames[0]
+		if len(roundFrames) > 1 {
+			freqDf = pt.concat(roundFrames)
+		}
+
+		// Composition fraction per (round, parentId, position, state): the per-round
+		// frequency scattered onto positions via the state matrix, summed per residue,
+		// then normalized per (round, parentId, position) column (A-0011).
+		compFrac := smDf.join(freqDf, { on: "variantKey", how: "inner" }).
+			groupBy("round", "parentId", "position", "state").
+			agg(pt.col("freq").sum().alias("posSum")).
+			withColumns(
+				pt.col("posSum").
+					truediv(pt.col("posSum").sum().over(["round", "parentId", "position"])).
+					alias("frac")
+			).
+			select(pt.col("round"), pt.col("parentId"), pt.col("position"), pt.col("state"), pt.col("frac"))
+
+		// Full (round × cell) grid, zero-filled, so residues absent in a round or the
+		// baseline still appear (emergence / depletion) rather than dropping out.
+		cells := compFrac.select(pt.col("parentId"), pt.col("position"), pt.col("state")).unique()
+		roundsU := compFrac.select(pt.col("round")).unique()
+		gridDf := roundsU.join(cells, { how: "cross" }).
+			join(compFrac, { on: ["round", "parentId", "position", "state"], how: "left" }).
+			withColumns(pt.col("frac").fillNull(pt.lit(0)).alias("frac"))
+
+		// Baseline fractions keyed by cell; zero where the baseline lacks the residue.
+		baseFrac := compFrac.filter(pt.col("round").eq(pt.lit(baselineRound))).
+			select(pt.col("parentId"), pt.col("position"), pt.col("state"), pt.col("frac").alias("baseFrac"))
+
+		// Drop the baseline round's own panel — it is log2(f/f)=0 everywhere by construction
+		// and carries no signal. Panels shown = one per non-baseline round.
+		compDf := gridDf.join(baseFrac, { on: ["parentId", "position", "state"], how: "left" }).
+			withColumns(pt.col("baseFrac").fillNull(pt.lit(0)).alias("baseFrac")).
+			withColumns(
+				pt.col("frac").plus(pt.lit(eps)).
+					truediv(pt.col("baseFrac").plus(pt.lit(eps))).
+					log2().
+					alias("log2fc")
+			).
+			filter(pt.col("round").neq(pt.lit(baselineRound))).
+			select(pt.col("round"), pt.col("parentId"), pt.col("position"), pt.col("state"), pt.col("log2fc"))
+
+		compDf.save("compositionHeatmap.tsv")
+	}
+
 	ptResult := ptWf.run()
 
 	// --- Value column spec, mode-dependent (name stays mode-neutral so the UI
@@ -318,10 +412,76 @@ wf.body(func(args) {
 	}
 	stateHeatmapPf := pf.build()
 
+	outputs := {
+		stateHeatmapPf: pframes.exportFrame(stateHeatmapPf)
+	}
+
+	// --- Composition heat map import + export (optional) ---
+	// [round, parentId, position, state] -> log2FC. parentId / position inherited from the
+	// profiler; round and state are block-local. The value is signed → tagged for the
+	// diverging colour scale (A-0017) via a block-owned annotation the UI reads.
+	if hasComposition {
+		compCols := xsv.importFile(
+			ptResult.getFile("compositionHeatmap.tsv"),
+			"tsv",
+			{
+				axes: [
+					{
+						column: "round",
+						spec: {
+							name: "pl7.app/repertoire/round",
+							type: "String",
+							annotations: {
+								"pl7.app/label": "Round"
+							}
+						}
+					},
+					{ column: "parentId", spec: parentAxisSpec },
+					{ column: "position", spec: positionAxisSpec },
+					{
+						column: "state",
+						spec: {
+							name: "pl7.app/repertoire/state",
+							type: "String",
+							domain: {
+								"pl7.app/alphabet": alphabet
+							},
+							annotations: {
+								"pl7.app/label": "State",
+								"pl7.app/table/fontFamily": "monospace"
+							}
+						}
+					}
+				],
+				columns: [{
+					column: "log2fc",
+					spec: {
+						name: "pl7.app/repertoire/compositionLog2FC",
+						valueType: "Double",
+						domain: {
+							"pl7.app/alphabet": alphabet
+						},
+						annotations: {
+							"pl7.app/label": "Composition log2 fold change",
+							"pl7.app/isScore": "true",
+							"pl7.app/heatmap/colorScale": "diverging"
+						}
+					}
+				}],
+				storageFormat: "Parquet",
+				partitionKeyLength: 0
+			},
+			{ splitDataAndSpec: true }
+		)
+		compPf := pframes.pFrameBuilder()
+		for k, v in compCols {
+			compPf.add(k, trace.inject(v.spec), v.data)
+		}
+		outputs.compositionHeatmapPf = pframes.exportFrame(compPf.build())
+	}
+
 	return {
-		outputs: {
-			stateHeatmapPf: pframes.exportFrame(stateHeatmapPf)
-		},
+		outputs: outputs,
 		exports: {}
 	}
 })
