@@ -461,7 +461,8 @@ export const platforma = BlockModelV3.create(dataModel)
     const sections: { type: "link"; href: `/${string}`; label: string }[] = [
       { type: "link", href: "/", label: "Mutation Heatmap" },
     ];
-    if (ctx.data.roundFrequencyRefs.length > 0) {
+    // Needs a baseline + at least one comparison round (see workflow's hasComposition).
+    if (ctx.data.roundFrequencyRefs.length >= 2) {
       sections.push({ type: "link", href: "/composition", label: "Composition Enrichment" });
     }
     if (ctx.data.knownAbundanceRef !== undefined) {

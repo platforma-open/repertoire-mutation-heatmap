@@ -52,7 +52,7 @@ wf.prepare(func(args) {
 	// Per-round frequency columns from the enrichment block (composition-enrichment view).
 	// Anchored on the abundance ref (freqAnchor, added above); ids come from findColumns and
 	// are added without a query key, retrieved by the ref itself in the body.
-	if !is_undefined(args.abundanceRef) && !is_undefined(args.roundFrequencyRefs) && len(args.roundFrequencyRefs) > 0 {
+	if !is_undefined(args.abundanceRef) && !is_undefined(args.roundFrequencyRefs) && len(args.roundFrequencyRefs) >= 2 {
 		for ref in args.roundFrequencyRefs {
 			bb.addSingle(ref)
 		}
@@ -244,8 +244,10 @@ wf.body(func(args) {
 	// `pl7.app/enrichment/condition` domain; round order (baseline = first) from the args
 	// array. Frequencies are fractions, so zeros are guarded by a small epsilon, not a
 	// count pseudocount.
+	// Need at least two rounds: one baseline plus one comparison. With a single round the
+	// baseline is filtered out below, leaving an empty result — so gate it out entirely.
 	roundRefs := args.roundFrequencyRefs
-	hasComposition := !is_undefined(roundRefs) && len(roundRefs) > 0
+	hasComposition := !is_undefined(roundRefs) && len(roundRefs) >= 2
 	if hasComposition {
 		eps := args.compositionEpsilon
 

@@ -233,17 +233,5 @@ watch(
     >
       The first round is the baseline (R0); drag to reorder.
     </div>
-
-    <PlNumberField
-      v-if="app.model.data.roundFrequencyRefs.length > 0"
-      v-model="app.model.data.compositionEpsilon"
-      label="Zero-guard epsilon"
-      :minValue="0"
-    >
-      <template #tooltip>
-        A small value added to both fractions before the log2 ratio, so residues absent in a round
-        or the baseline stay finite (they render as strong enrichment/depletion). Default 1e-6.
-      </template>
-    </PlNumberField>
   </PlAccordionSection>
 </template>
