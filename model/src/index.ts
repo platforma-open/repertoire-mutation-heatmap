@@ -1,11 +1,17 @@
 import type { GraphMakerState } from "@milaboratories/graph-maker";
 import type {
   InferOutputsType,
+  PColumnSpec,
   PFrameHandle,
   PlRef,
   SUniversalPColumnId,
 } from "@platforma-sdk/model";
-import { BlockModelV3, DataModelBuilder, createPFrameForGraphs } from "@platforma-sdk/model";
+import {
+  BlockModelV3,
+  ColumnCollectionBuilder,
+  DataModelBuilder,
+  createPFrameForGraphs,
+} from "@platforma-sdk/model";
 
 // Profiler spec names used as join keys — must stay byte-identical to the names the profiler emits.
 const STATE_MATRIX = "pl7.app/repertoire/stateMatrix";
@@ -47,6 +53,18 @@ export type BlockArgs = {
   propertyRef?: SUniversalPColumnId;
   /** Pre-aggregated known×sample abundance `[sampleId, knownVariantKey]` (heat map 2). */
   knownAbundanceRef?: PlRef;
+  /**
+   * Ordered per-round frequency columns from the enrichment block (composition-enrichment view).
+   * Each is one round's `[variantKey] -> frequency` (`pl7.app/frequency`); `[0]` is the baseline round R0.
+   * Empty = composition-enrichment view off.
+   */
+  roundFrequencyRefs: SUniversalPColumnId[];
+  /**
+   * Fraction-space epsilon added to both sides of the composition ratio before log2,
+   * to keep emergent/vanished residues finite. Frequencies are in [0,1] (not counts),
+   * so this is a small value (default 1e-6), not a count pseudocount.
+   */
+  compositionEpsilon: number;
   level: Alphabet;
   valueMode: ValueMode;
   /** Per-(parent, position) frequency normalization (abundance mode only). */
@@ -58,6 +76,7 @@ export type BlockArgs = {
 export type BlockUiState = {
   stateHeatmapState: GraphMakerState;
   knownHeatmapState: GraphMakerState;
+  compositionHeatmapState: GraphMakerState;
 };
 
 /** Unified persisted data: workflow-relevant selections + UI view state. */
@@ -66,6 +85,10 @@ export type BlockData = {
   abundanceRef?: PlRef;
   propertyRef?: SUniversalPColumnId;
   knownAbundanceRef?: PlRef;
+  /** Ordered per-round frequency columns; `[0]` = baseline R0. Empty = composition view off. */
+  roundFrequencyRefs: SUniversalPColumnId[];
+  /** Fraction-space epsilon for the composition ratio (default 1e-6). */
+  compositionEpsilon: number;
   level: Alphabet;
   valueMode: ValueMode;
   normalize: boolean;
@@ -90,6 +113,8 @@ const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
   valueMode: "abundance" as const,
   normalize: true,
   filter: { membership: "all" as const },
+  roundFrequencyRefs: [],
+  compositionEpsilon: 1e-6,
   stateHeatmapState: {
     title: "Deep Mutational Scanning",
     template: "heatmap",
@@ -135,6 +160,26 @@ const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
       },
     },
   },
+  compositionHeatmapState: {
+    title: "Composition Enrichment",
+    template: "heatmap",
+    currentTab: null,
+    // Value is log2 fold change (signed); the diverging palette is applied via the
+    // GraphMaker `defaultPalette` prop on the page. Disable GraphMaker's own row
+    // normalization and transform so the linear log2FC is shown as-is.
+    layersSettings: {
+      heatmap: {
+        normalizationDirection: null,
+        transform: null,
+      },
+    },
+    axesSettings: {
+      axisY: {
+        hideAxisLabels: false,
+        cellSize: 20,
+      },
+    },
+  },
 }));
 
 export const platforma = BlockModelV3.create(dataModel)
@@ -158,6 +203,9 @@ export const platforma = BlockModelV3.create(dataModel)
       valueMode: data.valueMode,
       normalize: data.valueMode === "abundance" ? data.normalize : false,
       filter: canonicalizeFilter(data.filter),
+      // Order is meaningful (baseline first) — pass through verbatim, do not sort.
+      roundFrequencyRefs: data.roundFrequencyRefs ?? [],
+      compositionEpsilon: data.compositionEpsilon ?? 1e-6,
     };
   })
 
@@ -185,15 +233,96 @@ export const platforma = BlockModelV3.create(dataModel)
     ),
   )
 
-  // Per-variant property columns `[variantKey] -> value`, anchored on the chosen
-  // state matrix's variant axis (idx 0). Sourced from an upstream affinity block,
-  // joined on variantKey. Values are SUniversalPColumnId (round-trip via stateMatrixRef).
+  // Per-variant numeric property columns for the `property` value-mode and the
+  // property-range filter. Discovered via findColumns (not getCanonicalOptions — see
+  // roundFrequencyOptions for why) anchored on BOTH the state matrix (profiler-keyed
+  // properties, e.g. mutations) and the abundance (enrichment-keyed properties). The
+  // anchor names `main` / `freqAnchor` must match the workflow's `bb.addAnchor(...)`.
+  // Numeric only (A-0015) — a mean of the property is what a cell shows.
   .output("propertyOptions", (ctx) => {
-    const anchor = ctx.data.stateMatrixRef;
-    if (anchor === undefined) return undefined;
-    return ctx.resultPool.getCanonicalOptions({ main: anchor }, [
-      { axes: [{ anchor: "main", idx: 0 }] },
-    ]);
+    const stateMatrixRef = ctx.data.stateMatrixRef;
+    if (stateMatrixRef === undefined) return undefined;
+    const stateSpec = ctx.resultPool.getPColumnSpecByRef(stateMatrixRef);
+    if (!stateSpec) return undefined;
+
+    const anchors: Record<string, PColumnSpec> = { main: stateSpec };
+    const abundanceRef = ctx.data.abundanceRef;
+    const abundanceSpec = abundanceRef
+      ? ctx.resultPool.getPColumnSpecByRef(abundanceRef)
+      : undefined;
+    if (abundanceSpec) anchors.freqAnchor = abundanceSpec;
+
+    const sourceColumns = ctx.resultPool.selectColumns(
+      (spec) =>
+        (spec.valueType as string) !== "File" &&
+        !(spec.annotations?.["pl7.app/isLinkerColumn"] === "true" && spec.axesSpec.length > 2),
+    );
+
+    const collection = new ColumnCollectionBuilder(ctx.getService("pframeSpec"))
+      .addSource(sourceColumns)
+      .build({ anchors });
+    if (!collection) return undefined;
+
+    const numeric = new Set(["Int", "Long", "Float", "Double"]);
+    const seen = new Set<string>();
+    const options: { label: string; value: SUniversalPColumnId }[] = [];
+    for (const m of collection.findColumns({ mode: "enrichment", maxHops: 0 })) {
+      if (!numeric.has(m.column.spec.valueType as string)) continue;
+      // Dedup a column reachable via both anchors (by identity, not anchored id).
+      const dedupKey = m.column.spec.name + "|" + JSON.stringify(m.column.spec.domain ?? {});
+      if (seen.has(dedupKey)) continue;
+      seen.add(dedupKey);
+      options.push({
+        label: (m.column.spec.annotations?.["pl7.app/label"] as string | undefined) ?? m.column.id,
+        value: m.column.id as SUniversalPColumnId,
+      });
+    }
+    return options;
+  })
+
+  // Per-round frequency columns from the enrichment block (composition-enrichment view).
+  // Each round is one `pl7.app/frequency` column carrying its round identity in domain
+  // `pl7.app/enrichment/condition`. The user orders the chosen rounds in the UI
+  // (baseline = first); the workflow reads each round's identity from that domain.
+  //
+  // Discovered via ColumnCollectionBuilder.findColumns anchored on the ABUNDANCE ref (the
+  // enrichment block keys these on `abundanceSpec.axesSpec[1]`). `findColumns` resolves via
+  // the spec frame, unlike `getCanonicalOptions` — whose id bakes in the enrichment column's
+  // nested-escaped-JSON domains (conditionsOrder / filteringConfig), which fail to round-trip
+  // in the workflow's anchored query. The anchor name `freqAnchor` must match the workflow's
+  // `bb.addAnchor("freqAnchor", ...)`; the discovered `column.id` resolves against it there.
+  //
+  // v1: variant-level only (maxHops 0). Cluster-keyed frequencies (enrichment on clustered
+  // abundance) need linker traversal (maxHops > 0) + adding the `variant→cluster` linker in
+  // the workflow (A-0016) — deferred, shared with the property-view cluster path.
+  .output("roundFrequencyOptions", (ctx) => {
+    const abundanceRef = ctx.data.abundanceRef;
+    if (abundanceRef === undefined) return undefined;
+    const anchorSpec = ctx.resultPool.getPColumnSpecByRef(abundanceRef);
+    if (!anchorSpec) return undefined;
+
+    // Exclude columns the WASM spec frame rejects (File value type; wide linkers).
+    const sourceColumns = ctx.resultPool.selectColumns(
+      (spec) =>
+        (spec.valueType as string) !== "File" &&
+        !(spec.annotations?.["pl7.app/isLinkerColumn"] === "true" && spec.axesSpec.length > 2),
+    );
+
+    const collection = new ColumnCollectionBuilder(ctx.getService("pframeSpec"))
+      .addSource(sourceColumns)
+      .build({ anchors: { freqAnchor: anchorSpec } });
+    if (!collection) return undefined;
+
+    const matches = collection.findColumns({
+      include: { name: "pl7.app/frequency" },
+      mode: "enrichment",
+      maxHops: 0,
+    });
+
+    return matches.map((m) => ({
+      label: (m.column.spec.annotations?.["pl7.app/label"] as string | undefined) ?? m.column.id,
+      value: m.column.id as SUniversalPColumnId,
+    }));
   })
 
   // Pre-aggregated known×sample abundance `[sampleId, knownVariantKey]` (heat map 2).
@@ -261,6 +390,26 @@ export const platforma = BlockModelV3.create(dataModel)
     }
   })
 
+  // Composition-enrichment heat map: per-round positional log2 fold change
+  // `[round, parentId, position, state] -> log2FC`. Present only when round-frequency
+  // inputs are selected (the workflow emits it conditionally).
+  .outputWithStatus("compositionHeatmapPf", (ctx): PFrameHandle | undefined => {
+    try {
+      const pCols = ctx.outputs?.resolve("compositionHeatmapPf")?.getPColumns();
+      if (pCols === undefined) return undefined;
+      return createPFrameForGraphs(ctx, pCols);
+    } catch {
+      return undefined;
+    }
+  })
+  .output("compositionHeatmapPCols", (ctx) => {
+    try {
+      return ctx.outputs?.resolve("compositionHeatmapPf")?.getPColumns();
+    } catch {
+      return undefined;
+    }
+  })
+
   // Heat map 2: known×sample abundance, rendered DIRECTLY from the result pool
   // (no precalc — the profiler already aggregated it to [sampleId, knownVariantKey]).
   // Anchored on the chosen abundance ref: returns the aggregated count + fraction
@@ -312,6 +461,9 @@ export const platforma = BlockModelV3.create(dataModel)
     const sections: { type: "link"; href: `/${string}`; label: string }[] = [
       { type: "link", href: "/", label: "Mutation Heatmap" },
     ];
+    if (ctx.data.roundFrequencyRefs.length > 0) {
+      sections.push({ type: "link", href: "/composition", label: "Composition Enrichment" });
+    }
     if (ctx.data.knownAbundanceRef !== undefined) {
       sections.push({ type: "link", href: "/known-heatmap", label: "Known Variants" });
     }
