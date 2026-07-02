@@ -260,8 +260,17 @@ wf.body(func(args) {
 			if !is_undefined(rSpec) && !is_undefined(rSpec.domain) && !is_undefined(rSpec.domain["pl7.app/enrichment/condition"]) {
 				roundId = rSpec.domain["pl7.app/enrichment/condition"]
 			}
+			// GraphMaker orders facets by the round axis label (numeric-collation sort), with
+			// no facet-order override — so the label must lead with the arrangement index for
+			// the panels to render in the user's chosen order. Skip the prefix when the round
+			// name is already that ordinal index (avoids a redundant "1. 1"); the bare name is
+			// then just the index, so ordering still holds.
+			roundKey := roundId
+			if roundId != string(i) {
+				roundKey = string(i) + ". " + roundId
+			}
 			if is_undefined(baselineRound) {
-				baselineRound = roundId
+				baselineRound = roundKey
 			}
 			rTable := pframes.tsvFileBuilder()
 			rTable.mem("8GiB")
@@ -269,7 +278,7 @@ wf.body(func(args) {
 			rTable.setAxisHeader(VARIANT_KEY_AXIS, "variantKey")
 			rTable.add(columns.getColumn(ref), { header: "freq" })
 			rDf := ptWf.frame(rTable.build(), { xsvType: "tsv" }).
-				withColumns(pt.lit(roundId).alias("round"))
+				withColumns(pt.lit(roundKey).alias("round"))
 			roundFrames = roundFrames + [rDf]
 		}
 		freqDf := roundFrames[0]
