@@ -266,14 +266,21 @@ export const platforma = BlockModelV3.create(dataModel)
     const numeric = new Set(["Int", "Long", "Float", "Double"]);
     const seen = new Set<string>();
     const options: { label: string; value: SUniversalPColumnId }[] = [];
-    for (const m of collection.findColumns({ mode: "enrichment", maxHops: 0 })) {
-      if (!numeric.has(m.column.spec.valueType as string)) continue;
+    // maxHops: 1 so cluster-keyed properties surface across the variant→cluster
+    // linker (A-0016); the workflow resolves them to per-variant via an explicit
+    // join. Anything reached at 0 hops (variant-keyed properties) still matches.
+    for (const m of collection.findColumns({ mode: "enrichment", maxHops: 1 })) {
+      const s = m.column.spec;
+      // The variant→cluster linker itself is Int-valued and would otherwise pass
+      // the numeric filter and show up as a bogus "property".
+      if (s.annotations?.["pl7.app/isLinkerColumn"] === "true") continue;
+      if (!numeric.has(s.valueType as string)) continue;
       // Dedup a column reachable via both anchors (by identity, not anchored id).
-      const dedupKey = m.column.spec.name + "|" + JSON.stringify(m.column.spec.domain ?? {});
+      const dedupKey = s.name + "|" + JSON.stringify(s.domain ?? {});
       if (seen.has(dedupKey)) continue;
       seen.add(dedupKey);
       options.push({
-        label: (m.column.spec.annotations?.["pl7.app/label"] as string | undefined) ?? m.column.id,
+        label: (s.annotations?.["pl7.app/label"] as string | undefined) ?? m.column.id,
         value: m.column.id as SUniversalPColumnId,
       });
     }
@@ -292,9 +299,9 @@ export const platforma = BlockModelV3.create(dataModel)
   // in the workflow's anchored query. The anchor name `freqAnchor` must match the workflow's
   // `bb.addAnchor("freqAnchor", ...)`; the discovered `column.id` resolves against it there.
   //
-  // v1: variant-level only (maxHops 0). Cluster-keyed frequencies (enrichment on clustered
-  // abundance) need linker traversal (maxHops > 0) + adding the `variant→cluster` linker in
-  // the workflow (A-0016) — deferred, shared with the property-view cluster path.
+  // Variant- and cluster-level: maxHops 1 so frequencies from enrichment run on clustered
+  // abundance (keyed by clusterId) surface across the `variant→cluster` linker; the workflow
+  // resolves them to per-variant via the same explicit join as the property view (A-0016).
   .output("roundFrequencyOptions", (ctx) => {
     const abundanceRef = ctx.data.abundanceRef;
     if (abundanceRef === undefined) return undefined;
@@ -316,7 +323,7 @@ export const platforma = BlockModelV3.create(dataModel)
     const matches = collection.findColumns({
       include: { name: "pl7.app/frequency" },
       mode: "enrichment",
-      maxHops: 0,
+      maxHops: 1,
     });
 
     return matches.map((m) => ({
