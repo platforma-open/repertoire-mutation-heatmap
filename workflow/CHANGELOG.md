@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.workflow
 
+## 1.1.1
+
+### Patch Changes
+
+- 5c24330: Ensure that enrichment plots are shown in user defined order
+
 ## 1.1.0
 
 ### Minor Changes
