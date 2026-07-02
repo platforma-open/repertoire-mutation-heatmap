@@ -49,13 +49,13 @@ export type BlockArgs = {
   stateMatrixRef: PlRef;
   /** Per-sample abundance `[sampleId, variantKey]` (required in abundance mode). */
   abundanceRef?: PlRef;
-  /** Per-variant property `[variantKey] -> value` (required in property mode). */
+  /** Property column, property mode: variant- or cluster-keyed; a cluster value is resolved onto variants in the workflow. */
   propertyRef?: SUniversalPColumnId;
   /** Pre-aggregated known×sample abundance `[sampleId, knownVariantKey]` (heat map 2). */
   knownAbundanceRef?: PlRef;
   /**
    * Ordered per-round frequency columns from the enrichment block (composition-enrichment view).
-   * Each is one round's `[variantKey] -> frequency` (`pl7.app/frequency`); `[0]` is the baseline round R0.
+   * Each is one round's `pl7.app/frequency` (variant- or cluster-keyed); `[0]` is the baseline round R0.
    * Empty = composition-enrichment view off.
    */
   roundFrequencyRefs: SUniversalPColumnId[];
@@ -233,12 +233,12 @@ export const platforma = BlockModelV3.create(dataModel)
     ),
   )
 
-  // Per-variant numeric property columns for the `property` value-mode and the
-  // property-range filter. Discovered via findColumns (not getCanonicalOptions — see
-  // roundFrequencyOptions for why) anchored on BOTH the state matrix (profiler-keyed
-  // properties, e.g. mutations) and the abundance (enrichment-keyed properties). The
-  // anchor names `main` / `freqAnchor` must match the workflow's `bb.addAnchor(...)`.
-  // Numeric only (A-0015) — a mean of the property is what a cell shows.
+  // Numeric property columns (variant- or cluster-keyed) for the `property` value-mode
+  // and the property-range filter, anchored on BOTH the state matrix (profiler-keyed
+  // properties, e.g. mutations) and the abundance (enrichment-keyed). The anchor names
+  // `main` / `freqAnchor` must match the workflow's `bb.addAnchor(...)`. findColumns, not
+  // getCanonicalOptions — the latter's ids bake in column domains that fail to round-trip
+  // in the workflow's anchored query. Numeric only, since a cell shows a mean.
   .output("propertyOptions", (ctx) => {
     const stateMatrixRef = ctx.data.stateMatrixRef;
     if (stateMatrixRef === undefined) return undefined;
@@ -266,13 +266,12 @@ export const platforma = BlockModelV3.create(dataModel)
     const numeric = new Set(["Int", "Long", "Float", "Double"]);
     const seen = new Set<string>();
     const options: { label: string; value: SUniversalPColumnId }[] = [];
-    // maxHops: 1 so cluster-keyed properties surface across the variant→cluster
-    // linker (A-0016); the workflow resolves them to per-variant via an explicit
-    // join. Anything reached at 0 hops (variant-keyed properties) still matches.
+    // maxHops 1 surfaces cluster-keyed properties across the variant→cluster linker
+    // (0-hop variant-keyed ones still match); the workflow resolves cluster ones per-variant.
     for (const m of collection.findColumns({ mode: "enrichment", maxHops: 1 })) {
       const s = m.column.spec;
-      // The variant→cluster linker itself is Int-valued and would otherwise pass
-      // the numeric filter and show up as a bogus "property".
+      // The variant→cluster linker itself is Int-valued and would otherwise pass the
+      // numeric filter and show up as a bogus "property".
       if (s.annotations?.["pl7.app/isLinkerColumn"] === "true") continue;
       if (!numeric.has(s.valueType as string)) continue;
       // Dedup a column reachable via both anchors (by identity, not anchored id).
@@ -299,9 +298,8 @@ export const platforma = BlockModelV3.create(dataModel)
   // in the workflow's anchored query. The anchor name `freqAnchor` must match the workflow's
   // `bb.addAnchor("freqAnchor", ...)`; the discovered `column.id` resolves against it there.
   //
-  // Variant- and cluster-level: maxHops 1 so frequencies from enrichment run on clustered
-  // abundance (keyed by clusterId) surface across the `variant→cluster` linker; the workflow
-  // resolves them to per-variant via the same explicit join as the property view (A-0016).
+  // maxHops 1 so frequencies from enrichment run on clustered abundance (keyed by clusterId)
+  // surface across the variant→cluster linker; the workflow resolves them per-variant.
   .output("roundFrequencyOptions", (ctx) => {
     const abundanceRef = ctx.data.abundanceRef;
     if (abundanceRef === undefined) return undefined;
@@ -468,7 +466,7 @@ export const platforma = BlockModelV3.create(dataModel)
     const sections: { type: "link"; href: `/${string}`; label: string }[] = [
       { type: "link", href: "/", label: "Mutation Heatmap" },
     ];
-    // Needs a baseline + at least one comparison round (see workflow's hasComposition).
+    // Needs a baseline + at least one comparison round.
     if (ctx.data.roundFrequencyRefs.length >= 2) {
       sections.push({ type: "link", href: "/composition", label: "Composition Enrichment" });
     }

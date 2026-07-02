@@ -29,8 +29,7 @@ PARENT_ID_AXIS := "pl7.app/repertoire/parentId"
 POSITION_AXIS := "pl7.app/repertoire/position"
 SAMPLE_ID_AXIS := "pl7.app/sampleId"
 
-// Cluster-id axis names (unprefixed + legacy vdj-prefixed), used to resolve a
-// cluster-keyed property down to variants via the variant→cluster linker (A-0016).
+// clusterId axis name, plain and vdj-prefixed — different clustering-block versions emit each.
 isClusterIdAxis := func(name) {
 	return name == "pl7.app/clusterId" || name == "pl7.app/vdj/clusterId"
 }
@@ -77,10 +76,10 @@ wf.prepare(func(args) {
 	if !is_undefined(args.filter) && !is_undefined(args.filter.propertyRef) {
 		bb.addSingle(args.filter.propertyRef, "filterProperty")
 	}
-	// Variant→cluster linkers (pl7.app/link, axes [clusterId, variantKey]). Needed when a
-	// chosen property / filter-property / round-frequency is cluster-keyed, to broadcast the
-	// cluster value onto its member variants (A-0016). Fetched anchored on the state matrix's
-	// variant axis; the body picks the linker matching each column's clustering run.
+	// Variant→cluster linkers (pl7.app/link, axes [clusterId, variantKey]). Fetched when a
+	// property / filter-property / round-frequency may be cluster-keyed, to broadcast the
+	// cluster value onto its member variants; the body picks the linker matching each
+	// column's clustering run.
 	hasComposition := !is_undefined(args.roundFrequencyRefs) && len(args.roundFrequencyRefs) >= 2
 	needLinkers := (args.valueMode == "property" && !is_undefined(args.propertyRef)) ||
 		(!is_undefined(args.filter) && !is_undefined(args.filter.propertyRef)) ||
@@ -94,8 +93,7 @@ wf.prepare(func(args) {
 	}
 	// Per-round frequency columns from the enrichment block (composition-enrichment view).
 	// Anchored on the abundance ref (freqAnchor, added above); ids come from findColumns and
-	// are added without a query key, retrieved by the ref itself in the body. Each may be
-	// variant- or cluster-keyed — resolved to per-variant in the body via the linker (A-0016).
+	// are added without a query key, retrieved by the ref itself in the body.
 	if !is_undefined(args.abundanceRef) && hasComposition {
 		for ref in args.roundFrequencyRefs {
 			bb.addSingle(ref)
@@ -171,12 +169,11 @@ wf.body(func(args) {
 		abDf = ptWf.frame(abTable.build(), { xsvType: "tsv" })
 	}
 
-	// Resolve a property column to a [variantKey -> <valueHeader>] frame. A
-	// variant-keyed column is read directly; a cluster-keyed column (pl7.app/clusterId)
-	// is broadcast to its member variants through the variant→cluster linker
-	// (pl7.app/link), joined explicitly here — the bundle does not re-project a value
-	// across a linker onto the finer variant axis (A-0016). Returns undefined when the
-	// column is neither variant- nor cluster-keyed, or its clustering run has no linker.
+	// Resolve a property column to a [variantKey -> <valueHeader>] frame. Variant-keyed:
+	// read directly. Cluster-keyed (pl7.app/clusterId): broadcast to member variants via
+	// the variant→cluster linker (pl7.app/link) — joined explicitly here because the bundle
+	// does not re-project a value across a linker onto the finer variant axis. Undefined when
+	// the column is neither, or its clustering run has no linker in the pool.
 	resolveVariantValueDf := func(colKey, valueHeader) {
 		spec := columns.getSpec(colKey)
 		if is_undefined(spec) {
@@ -198,7 +195,6 @@ wf.body(func(args) {
 			return ptWf.frame(vt.build(), { xsvType: "tsv" }).
 				select(pt.col("variantKey"), pt.col("val").alias(valueHeader))
 		}
-		// Cluster-keyed: locate the property's cluster axis.
 		clusterAxis := undefined
 		for ax in spec.axesSpec {
 			if isClusterIdAxis(ax.name) {
@@ -209,7 +205,7 @@ wf.body(func(args) {
 		if is_undefined(clusterAxis) {
 			return undefined
 		}
-		// Pick the variant→cluster linker from the same clustering run (domain match).
+		// Match a linker to this property's clustering run by cluster-axis domain.
 		linker := undefined
 		linkerClusterAxisName := undefined
 		for lc in columns.getColumns("linkers") {
@@ -232,7 +228,6 @@ wf.body(func(args) {
 		if is_undefined(linker) {
 			return undefined
 		}
-		// Cluster property frame [clusterId -> value].
 		ct := pframes.tsvFileBuilder()
 		ct.mem("8GiB")
 		ct.cpu(2)
@@ -240,7 +235,7 @@ wf.body(func(args) {
 		ct.add(columns.getColumn(colKey), { header: "val" })
 		clusterDf := ptWf.frame(ct.build(), { xsvType: "tsv" }).
 			select(pt.col("clusterId"), pt.col("val").alias(valueHeader))
-		// Linker frame [clusterId, variantKey] (value column unused).
+		// Only the linker's two axes matter; its value column is unused.
 		lt := pframes.tsvFileBuilder()
 		lt.mem("8GiB")
 		lt.cpu(2)
@@ -249,18 +244,15 @@ wf.body(func(args) {
 		lt.add(linker, { header: "link" })
 		linkDf := ptWf.frame(lt.build(), { xsvType: "tsv" }).
 			select(pt.col("clusterId"), pt.col("variantKey"))
-		// Broadcast each cluster's value onto its member variants.
 		return clusterDf.join(linkDf, { on: "clusterId", how: "inner" }).
 			select(pt.col("variantKey"), pt.col(valueHeader))
 	}
 
-	// Value-mode property frame [variantKey -> variantValue] (property mode). The
-	// property may be variant- or cluster-keyed; resolve to per-variant (A-0016).
 	valuePropDf := undefined
 	if valueMode == "property" {
 		valuePropDf = resolveVariantValueDf("valueProperty", "variantValue")
 		if is_undefined(valuePropDf) {
-			// Cluster-keyed property with no resolvable variant→cluster linker.
+			// Cluster-keyed property with no resolvable variant→cluster linker: no value source.
 			return { outputs: {}, exports: {} }
 		}
 	}
@@ -274,8 +266,7 @@ wf.body(func(args) {
 		}
 	}
 
-	// Variants passing the property-range filter (shared by both value modes). The
-	// filter property may be variant- or cluster-keyed; resolve to per-variant first.
+	// Variants passing the property-range filter.
 	keptByProperty := undefined
 	if hasPropFilter {
 		filterDf := resolveVariantValueDf("filterProperty", "fProp")
@@ -341,8 +332,8 @@ wf.body(func(args) {
 		return agg.withColumns(pt.lit(subsetLabel).alias("subset"))
 	}
 
-	// A filter contributes a "Filtered" facet only if it restricts the variant set:
-	// a sample selection, or a property-range filter that actually resolved.
+	// "Filtered" facet only when the filter restricts the variant set: a sample
+	// selection, or a property-range filter that resolved.
 	filterActive := hasSampleFilter || !is_undefined(keptByProperty)
 
 	aggAll := aggregateCells(buildVariantValue(false), "All variants")
@@ -367,7 +358,7 @@ wf.body(func(args) {
 
 	// --- Composition-enrichment precalc (optional) ---
 	// Positional composition shift across rounds: log2(round fraction / baseline fraction),
-	// on the per-position composition frequency (A-0019). Consumes the enrichment block's
+	// on the per-position composition frequency. Consumes the enrichment block's
 	// per-round per-variant frequency columns. Round identity comes from each column's
 	// `pl7.app/enrichment/condition` domain; round order (baseline = first) from the args
 	// array. Frequencies are fractions, so zeros are guarded by a small epsilon, not a
@@ -379,9 +370,8 @@ wf.body(func(args) {
 	if hasComposition {
 		eps := args.compositionEpsilon
 
-		// Long per-round frequency frame [variantKey, round, freq]. Each round's frequency
-		// may be variant- or cluster-keyed; resolve to per-variant via the variant→cluster
-		// linker (A-0016) — identical to the property view's cluster path.
+		// Long per-round frequency frame [variantKey, round, freq]; each round resolved to
+		// per-variant (variant- or cluster-keyed).
 		roundFrames := []
 		baselineRound := undefined
 		for i, ref in roundRefs {
@@ -423,7 +413,7 @@ wf.body(func(args) {
 
 			// Composition fraction per (round, parentId, position, state): the per-round
 			// frequency scattered onto positions via the state matrix, summed per residue,
-			// then normalized per (round, parentId, position) column (A-0011).
+			// then normalized per (round, parentId, position) column.
 			compFrac := smDf.join(freqDf, { on: "variantKey", how: "inner" }).
 				groupBy("round", "parentId", "position", "state").
 				agg(pt.col("freq").sum().alias("posSum")).
@@ -564,7 +554,7 @@ wf.body(func(args) {
 	// --- Composition heat map import + export (optional) ---
 	// [round, parentId, position, state] -> log2FC. parentId / position inherited from the
 	// profiler; round and state are block-local. The value is signed → tagged for the
-	// diverging colour scale (A-0017) via a block-owned annotation the UI reads.
+	// diverging colour scale via a block-owned annotation the UI reads.
 	if hasComposition {
 		compCols := xsv.importFile(
 			ptResult.getFile("compositionHeatmap.tsv"),
