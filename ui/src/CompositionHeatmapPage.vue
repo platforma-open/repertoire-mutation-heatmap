@@ -20,7 +20,7 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
 
   // Import schema axis order: [round, parentId, position, state].
   const axes = valueCol.spec.axesSpec;
-  return [
+  const options: PredefinedGraphOption<"heatmap">[] = [
     { inputName: "value", selectedSource: valueCol.spec },
     { inputName: "x", selectedSource: axes[2] }, // position
     { inputName: "y", selectedSource: axes[3] }, // state
@@ -28,6 +28,19 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
     { inputName: "facetBy", selectedSource: axes[0] }, // round — one panel per round
     { inputName: "tooltipContent", selectedSource: axes[3] }, // show State in the tooltip
   ];
+
+  // Region + parent-sequence tracks under the position (X) axis — same position-keyed columns
+  // as the main heatmap (the workflow adds them to this frame too). Region only when present.
+  const regionCol = pCols.find((p) => p.spec.name === "pl7.app/repertoire/regionAnnotation");
+  if (regionCol) {
+    options.push({ inputName: "annotationsX", selectedSource: regionCol.spec });
+  }
+  const parentCol = pCols.find((p) => p.spec.name === "pl7.app/repertoire/parentResidue");
+  if (parentCol) {
+    options.push({ inputName: "annotationsX", selectedSource: parentCol.spec });
+  }
+
+  return options;
 });
 </script>
 
