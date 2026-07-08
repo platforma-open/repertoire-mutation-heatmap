@@ -489,9 +489,11 @@ wf.body(func(args) {
 	}
 	// Region annotation track: [position] -> region, keyed on the same position axis as the
 	// heat map value column so GraphMaker aligns it under the X axis. String value → discrete
-	// annotation. Rides along in stateHeatmapPf; the UI presets it as the annotationsX track.
+	// annotation. Added to both the state and composition frames; the UI presets it as an
+	// annotationsX track on each page.
+	regionCols := undefined
 	if hasRegion {
-		regionCols := xsv.importFile(
+		regionCols = xsv.importFile(
 			ptResult.getFile("regionByPosition.tsv"),
 			"tsv",
 			{
@@ -612,6 +614,16 @@ wf.body(func(args) {
 		compPf := pframes.pFrameBuilder()
 		for k, v in compCols {
 			compPf.add(k, trace.inject(v.spec), v.data)
+		}
+		// Same position-keyed region + parent-residue tracks as the state heat map — the
+		// composition plot shares the position (X) axis and the selected parent, so they align.
+		if hasRegion {
+			for k, v in regionCols {
+				compPf.add("region/" + k, trace.inject(v.spec), v.data)
+			}
+		}
+		for k, v in parentCols {
+			compPf.add("parent/" + k, trace.inject(v.spec), v.data)
 		}
 		outputs.compositionHeatmapPf = pframes.exportFrame(compPf.build())
 	}

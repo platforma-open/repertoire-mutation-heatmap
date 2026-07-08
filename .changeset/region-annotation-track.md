@@ -4,10 +4,11 @@
 '@platforma-open/milaboratories.repertoire-mutation-heatmap.ui': patch
 ---
 
-Add position-axis annotation tracks to the mutation heatmap: a region track (from the profiler's
-per-position region annotation, aa state matrix with a region scheme) and a parent-sequence track
-(parent residue per position, derived from the state matrix). Both are collapsed to a
-position-keyed column so GraphMaker accepts them as X-axis annotations; single-parent runs.
+Add position-axis annotation tracks to the mutation heatmap and the Enrichment Analysis
+(per-round) plots: a region track (from the profiler's per-position region annotation, aa state
+matrix with a region scheme) and a parent-sequence track (parent residue per position, derived
+from the state matrix). Both are collapsed to a position-keyed column so GraphMaker accepts them
+as X-axis annotations.
 
 Rename the heatmap Y axis from "State" to the alphabet-aware "Amino Acids" (aa) / "Nucleotides"
 (nt), on both the mutation and composition-enrichment plots. Rename the X axis from the inherited
