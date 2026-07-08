@@ -50,8 +50,9 @@ export type VariantFilter = {
 export type BlockArgs = {
   /** Profiler state matrix `[variantKey, parentId, position] -> state`. */
   stateMatrixRef: PlRef;
-  /** Parent to scope the whole plot to; unset until the UI auto-selects the first one. */
-  selectedParentId?: string;
+  /** Parent to scope the whole plot to. Required — the args projection throws until it is set
+   *  (the UI auto-selects the first parent), so the workflow only ever runs single-parent. */
+  selectedParentId: string;
   /** Per-sample abundance `[sampleId, variantKey]` (required in abundance mode). */
   abundanceRef?: PlRef;
   /** Per-variant property `[variantKey] -> value` (required in property mode). */
@@ -200,6 +201,13 @@ export const platforma = BlockModelV3.create(dataModel)
     if (data.stateMatrixRef === undefined) {
       throw new Error("Select a state-matrix column to render");
     }
+    // Required: the plot is always scoped to one parent, so the workflow never runs over all
+    // parents (which would make the position-keyed region/parent tracks a cross-parent mixture).
+    // The UI auto-selects the first parent from the pool, so this is set within a moment of
+    // choosing a state matrix; until then the block stays uncalculated, like the other inputs.
+    if (data.selectedParentId === undefined) {
+      throw new Error("Select a parent");
+    }
     if (data.abundanceRef === undefined) {
       throw new Error("Select an abundance column");
     }
@@ -245,19 +253,36 @@ export const platforma = BlockModelV3.create(dataModel)
     });
   })
 
-  // Per-sample, per-variant abundance `[sampleId, variantKey]`. The 2-axis filter
-  // excludes the known-level `[sampleId, knownVariantKey]` abundance.
-  .output("abundanceOptions", (ctx) =>
-    ctx.resultPool.getOptions(
-      [
-        {
-          axes: [{ name: SAMPLE_ID_AXIS }, { name: VARIANT_KEY_AXIS }],
-          annotations: { "pl7.app/isAbundance": "true" },
-        },
-      ],
+  // Per-sample, per-variant abundance `[sampleId, variantKey]`, scoped to the SELECTED dataset:
+  // only columns whose variantKey axis matches the chosen state matrix's (same
+  // pl7.app/repertoire/extractionRunId + pl7.app/alphabet, i.e. same profiler run and level) — so
+  // the abundance joins the state matrix. Undefined until a dataset is picked, like the parent
+  // selector. The 2-axis check excludes the known-level `[sampleId, knownVariantKey]` abundance.
+  .output("abundanceOptions", (ctx) => {
+    const { stateMatrixRef } = ctx.data;
+    if (stateMatrixRef === undefined) return undefined;
+    const stateSpec = ctx.resultPool.getPColumnSpecByRef(stateMatrixRef);
+    if (!stateSpec) return undefined;
+    const smVariantKey = stateSpec.axesSpec.find((a) => a.name === VARIANT_KEY_AXIS);
+    if (!smVariantKey) return undefined;
+    const runId = smVariantKey.domain?.["pl7.app/repertoire/extractionRunId"];
+    const alphabet = smVariantKey.domain?.["pl7.app/alphabet"];
+    return ctx.resultPool.getOptions(
+      (spec) => {
+        if (spec.kind !== "PColumn") return false;
+        const s = spec as PColumnSpec;
+        if (s.annotations?.["pl7.app/isAbundance"] !== "true") return false;
+        if (s.axesSpec.length !== 2) return false;
+        const vk = s.axesSpec.find((a) => a.name === VARIANT_KEY_AXIS);
+        if (!vk || !s.axesSpec.some((a) => a.name === SAMPLE_ID_AXIS)) return false;
+        return (
+          vk.domain?.["pl7.app/repertoire/extractionRunId"] === runId &&
+          vk.domain?.["pl7.app/alphabet"] === alphabet
+        );
+      },
       { label: { includeNativeLabel: true } },
-    ),
-  )
+    );
+  })
 
   // Per-variant numeric property columns for the `property` value-mode and the
   // property-range filter. Discovered via findColumns (not getCanonicalOptions — see

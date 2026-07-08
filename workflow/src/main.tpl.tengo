@@ -535,7 +535,7 @@ wf.body(func(args) {
 						"pl7.app/alphabet": alphabet
 					},
 					annotations: {
-						"pl7.app/label": (alphabet == "aminoacid") ? "Parent AA" : "Parent nt",
+						"pl7.app/label": (alphabet == "aminoacid") ? "Parent AA" : "Parent NT",
 						"pl7.app/table/fontFamily": "monospace"
 					}
 				}

@@ -35,6 +35,11 @@ function roundLabel(ref: SUniversalPColumnId): string {
 type StateMatrixRef = NonNullable<typeof app.model.data.stateMatrixRef>;
 function onSelectStateMatrix(ref: StateMatrixRef | undefined) {
   app.model.data.stateMatrixRef = ref;
+  // Clear the parent and abundance: both belong to the previous dataset. With selectedParentId
+  // (and abundance) required in args, this holds the workflow (uncalculated) until the options
+  // watches auto-select valid defaults — avoiding a run over a stale/mismatched selection.
+  app.model.data.selectedParentId = undefined;
+  app.model.data.abundanceRef = undefined;
   app.model.data.defaultBlockLabel =
     app.model.outputs.stateMatrixOptions?.find(
       (o) => ref && o.ref.blockId === ref.blockId && o.ref.name === ref.name,
@@ -122,22 +127,39 @@ const parentOptionsDisplay = computed(() => {
   const current = app.model.data.selectedParentId;
   return current ? [{ value: current, label: current }] : [];
 });
+
+// Default the abundance to the first option once a dataset is chosen — and re-default when the
+// dataset changes (onSelectStateMatrix clears the stale ref, and this re-fires because it's keyed
+// on stateMatrixRef). Gated on a dataset being selected so nothing is picked before then, matching
+// the parent selector. abundanceOptions is dataset-scoped (same run as the state matrix) and does
+// not depend on abundanceRef, so the default is always correct and this can't loop.
+watch(
+  () => ({
+    dataset: app.model.data.stateMatrixRef,
+    options: app.model.outputs.abundanceOptions,
+  }),
+  ({ dataset, options }) => {
+    if (!dataset || !options || options.length === 0) return;
+    const cur = app.model.data.abundanceRef;
+    const valid =
+      !!cur && options.some((o) => o.ref.blockId === cur.blockId && o.ref.name === cur.name);
+    if (!valid) {
+      app.model.data.abundanceRef = options[0].ref;
+    }
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
   <PlDropdownRef
     :model-value="app.model.data.stateMatrixRef"
     :options="app.model.outputs.stateMatrixOptions"
-    label="Variant residues"
+    label="Select dataset"
     clearable
     required
     @update:model-value="onSelectStateMatrix"
   >
-    <template #tooltip>
-      The per-variant residue data from the Amplicon Repertoire Profiling block — the amino acid (or
-      nucleotide) each variant carries at every aligned position. Choose the amino-acid or
-      nucleotide version; the heatmap plots position × residue.
-    </template>
   </PlDropdownRef>
 
   <PlDropdown
