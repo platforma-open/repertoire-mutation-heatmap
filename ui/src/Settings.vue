@@ -1,14 +1,12 @@
 <script setup lang="ts">
 import type {
-  ValueMode,
   Alphabet,
   VariantFilter,
 } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import type { PObjectId, SUniversalPColumnId } from "@platforma-sdk/model";
-import { getSingleColumnData } from "@platforma-sdk/model";
+import { getSingleColumnData, getUniqueSourceValuesWithLabels } from "@platforma-sdk/model";
 import {
   PlAccordionSection,
-  PlBtnGroup,
   PlCheckbox,
   PlDropdown,
   PlDropdownMulti,
@@ -17,15 +15,10 @@ import {
   PlNumberField,
   PlTooltip,
 } from "@platforma-sdk/ui-vue";
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useApp } from "./app";
 
 const app = useApp();
-
-const valueModeOptions: { label: string; value: ValueMode }[] = [
-  { label: "Abundance", value: "abundance" },
-  { label: "Property", value: "property" },
-];
 
 const filterOpen = ref(false);
 const compositionOpen = ref(false);
@@ -34,6 +27,18 @@ const compositionOpen = ref(false);
 function roundLabel(ref: SUniversalPColumnId): string {
   const opts = app.model.outputs.roundFrequencyOptions ?? [];
   return opts.find((o) => o.value === ref)?.label ?? String(ref);
+}
+
+// Snapshot the picked dataset's name into data on selection — the model's args-only
+// `.subtitle` reads it from there (it can't resolve the label live). A user-gesture write,
+// not an output→data watchEffect, so no hairpin.
+type StateMatrixRef = NonNullable<typeof app.model.data.stateMatrixRef>;
+function onSelectStateMatrix(ref: StateMatrixRef | undefined) {
+  app.model.data.stateMatrixRef = ref;
+  app.model.data.defaultBlockLabel =
+    app.model.outputs.stateMatrixOptions?.find(
+      (o) => ref && o.ref.blockId === ref.blockId && o.ref.name === ref.name,
+    )?.label ?? "";
 }
 
 // Replace the whole filter object on every edit (data is persisted server-side;
@@ -75,15 +80,58 @@ watch(
   },
   { immediate: true },
 );
+
+// Enumerate the available parents from the state matrix's parentId axis (idx 1) — straight from
+// the result pool, so the selector is populated before the main workflow runs. Then auto-select
+// the first parent when nothing valid is chosen. The write targets `selectedParentId`, but the
+// options come from `stateMatrixPf` (which does NOT depend on it), so this can't loop — the same
+// safe, deterministic default-selection shape as the block-label pattern.
+const parentOptions = ref<{ value: string; label: string }[]>([]);
+watch(
+  () => ({
+    pframe: app.model.outputs.stateMatrixPf,
+    colId: app.model.outputs.stateMatrixColId,
+  }),
+  async ({ pframe, colId }) => {
+    if (!pframe || !colId) {
+      parentOptions.value = [];
+      return;
+    }
+    try {
+      const res = await getUniqueSourceValuesWithLabels(pframe, {
+        columnId: colId as PObjectId,
+        axisIdx: 1,
+      });
+      parentOptions.value = res.values.map((v) => ({ value: v.value, label: v.label }));
+      const current = app.model.data.selectedParentId;
+      if (parentOptions.value.length > 0 && !parentOptions.value.some((o) => o.value === current)) {
+        app.model.data.selectedParentId = parentOptions.value[0].value;
+      }
+    } catch {
+      parentOptions.value = [];
+    }
+  },
+  { immediate: true },
+);
+
+// Options for the dropdown. While the async enumeration is still loading (e.g. the Settings
+// panel was just reopened and the component remounted), fall back to the persisted selection so
+// the dropdown shows it as valid instead of flashing empty for a moment.
+const parentOptionsDisplay = computed(() => {
+  if (parentOptions.value.length > 0) return parentOptions.value;
+  const current = app.model.data.selectedParentId;
+  return current ? [{ value: current, label: current }] : [];
+});
 </script>
 
 <template>
   <PlDropdownRef
-    v-model="app.model.data.stateMatrixRef"
+    :model-value="app.model.data.stateMatrixRef"
     :options="app.model.outputs.stateMatrixOptions"
     label="Variant residues"
     clearable
     required
+    @update:model-value="onSelectStateMatrix"
   >
     <template #tooltip>
       The per-variant residue data from the Amplicon Repertoire Profiling block — the amino acid (or
@@ -92,16 +140,17 @@ watch(
     </template>
   </PlDropdownRef>
 
-  <PlBtnGroup v-model="app.model.data.valueMode" :options="valueModeOptions" label="Colour by">
-    <template #tooltip>
-      What each cell's colour represents. <b>Abundance</b> — how abundant the variants carrying that
-      residue are. <b>Property</b> — the average of a measured per-variant property (e.g. a binding
-      affinity) across those variants.
-    </template>
-  </PlBtnGroup>
+  <PlDropdown
+    :model-value="app.model.data.selectedParentId"
+    :options="parentOptionsDisplay"
+    label="Parent"
+    required
+    @update:model-value="(v?: string) => (app.model.data.selectedParentId = v ?? undefined)"
+  >
+    <template #tooltip> Select parent (alignment reference). </template>
+  </PlDropdown>
 
   <PlDropdownRef
-    v-if="app.model.data.valueMode === 'abundance'"
     v-model="app.model.data.abundanceRef"
     :options="app.model.outputs.abundanceOptions"
     label="Abundance"
@@ -109,28 +158,12 @@ watch(
     required
   >
     <template #tooltip>
-      How abundant each variant is in each sample — read counts or fractions from the Amplicon
-      Repertoire Profiling block. Cells sum this over the variants carrying each residue at each
-      position.
+      Choose your variants' abundance — read counts or fractions. The heatmap colours each residue
+      by how abundant the variants carrying it are.
     </template>
   </PlDropdownRef>
 
-  <PlDropdown
-    v-if="app.model.data.valueMode === 'property'"
-    v-model="app.model.data.propertyRef"
-    :options="app.model.outputs.propertyOptions ?? []"
-    label="Per-variant property"
-    clearable
-    required
-  >
-    <template #tooltip>
-      A measured value attached to each variant — for example a binding affinity (Tite-Seq Kd) from
-      an upstream assay block. Each cell shows the average of this value across the variants
-      carrying that residue at that position.
-    </template>
-  </PlDropdown>
-
-  <PlTooltip v-if="app.model.data.valueMode === 'abundance'" position="left">
+  <PlTooltip position="left">
     <PlCheckbox
       :model-value="app.model.data.normalize"
       @update:model-value="(v: boolean) => (app.model.data.normalize = v)"
@@ -205,7 +238,7 @@ watch(
   </PlAccordionSection>
 
   <!-- Composition-enrichment view: positional log2 fold change across selection rounds. -->
-  <PlAccordionSection v-model="compositionOpen" label="Composition enrichment (across rounds)">
+  <PlAccordionSection v-model="compositionOpen" label="Enrichment Analysis">
     <PlDropdownMulti
       :model-value="app.model.data.roundFrequencyRefs"
       :options="app.model.outputs.roundFrequencyOptions ?? []"
@@ -216,8 +249,8 @@ watch(
       <template #tooltip>
         Per-round, per-variant frequency columns exported by an upstream Enrichment block. Pick the
         rounds to compare; the heatmap shows, per position and residue, the log2 fold change of the
-        residue composition in each round versus the baseline round. Adds the "Composition
-        Enrichment" page.
+        residue composition in each round versus the baseline round. Adds the "Enrichment Analysis"
+        page.
       </template>
     </PlDropdownMulti>
 

@@ -19,6 +19,9 @@ const VARIANT_KEY_AXIS = "pl7.app/variantKey";
 const KNOWN_VARIANT_KEY_AXIS = "pl7.app/knownVariantKey";
 const SAMPLE_ID_AXIS = "pl7.app/sampleId";
 
+// Subtitle fallback when no dataset is selected yet.
+const NO_DATASET_LABEL = "No dataset selected";
+
 /** Sequence alphabet of the state matrix / variant axis. */
 export type Alphabet = "aminoacid" | "nucleotide";
 
@@ -47,6 +50,8 @@ export type VariantFilter = {
 export type BlockArgs = {
   /** Profiler state matrix `[variantKey, parentId, position] -> state`. */
   stateMatrixRef: PlRef;
+  /** Parent to scope the whole plot to; unset until the UI auto-selects the first one. */
+  selectedParentId?: string;
   /** Per-sample abundance `[sampleId, variantKey]` (required in abundance mode). */
   abundanceRef?: PlRef;
   /** Per-variant property `[variantKey] -> value` (required in property mode). */
@@ -81,7 +86,14 @@ export type BlockUiState = {
 
 /** Unified persisted data: workflow-relevant selections + UI view state. */
 export type BlockData = {
+  // Block label shown as the subtitle. `customBlockLabel` is the user-renamed override;
+  // `defaultBlockLabel` holds the selected dataset's name, snapshotted by the UI on selection
+  // (the `.subtitle` context is args-only and can't resolve the dataset label live).
+  customBlockLabel?: string;
+  defaultBlockLabel?: string;
   stateMatrixRef?: PlRef;
+  /** Parent the plot is scoped to (UI auto-selects the first available on load). */
+  selectedParentId?: string;
   abundanceRef?: PlRef;
   propertyRef?: SUniversalPColumnId;
   knownAbundanceRef?: PlRef;
@@ -161,7 +173,7 @@ const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
     },
   },
   compositionHeatmapState: {
-    title: "Composition Enrichment",
+    title: "Enrichment Analysis",
     template: "heatmap",
     currentTab: null,
     // Value is log2 fold change (signed); the diverging palette is applied via the
@@ -188,20 +200,21 @@ export const platforma = BlockModelV3.create(dataModel)
     if (data.stateMatrixRef === undefined) {
       throw new Error("Select a state-matrix column to render");
     }
-    if (data.valueMode === "abundance" && data.abundanceRef === undefined) {
-      throw new Error("Abundance value-mode requires an abundance column");
-    }
-    if (data.valueMode === "property" && data.propertyRef === undefined) {
-      throw new Error("Property value-mode requires a per-variant property column");
+    if (data.abundanceRef === undefined) {
+      throw new Error("Select an abundance column");
     }
     return {
       stateMatrixRef: data.stateMatrixRef,
+      selectedParentId: data.selectedParentId,
       abundanceRef: data.abundanceRef,
-      propertyRef: data.valueMode === "property" ? data.propertyRef : undefined,
+      // Value mode is always abundance — the UI no longer exposes the abundance/property
+      // switch. The workflow retains the property path (dormant), so pin the mode here and
+      // send no property ref regardless of any value persisted from an earlier version.
+      propertyRef: undefined,
       knownAbundanceRef: data.knownAbundanceRef,
       level: data.level,
-      valueMode: data.valueMode,
-      normalize: data.valueMode === "abundance" ? data.normalize : false,
+      valueMode: "abundance",
+      normalize: data.normalize,
       filter: canonicalizeFilter(data.filter),
       // Order is meaningful (baseline first) — pass through verbatim, do not sort.
       roundFrequencyRefs: data.roundFrequencyRefs ?? [],
@@ -211,13 +224,26 @@ export const platforma = BlockModelV3.create(dataModel)
 
   // --- Input selection from the result pool ---
 
-  // aa and nt state matrices both surface, distinguished by the pl7.app/alphabet
-  // domain on the variant/position axes; the native label shows which.
-  .output("stateMatrixOptions", (ctx) =>
-    ctx.resultPool.getOptions([{ name: STATE_MATRIX }], {
-      label: { includeNativeLabel: true },
-    }),
-  )
+  // Dataset picker: show the dataset (trace) label, like other blocks (e.g.
+  // clonotype-clustering), not the column's native label ("Mutation State aa").
+  // aa and nt state matrices share the name + dataset label, distinguished only by the
+  // pl7.app/alphabet domain — so when one dataset exposes both, append a compact (aa)/(nt)
+  // suffix to keep the options unique; otherwise leave the plain dataset name.
+  .output("stateMatrixOptions", (ctx) => {
+    const options = ctx.resultPool.getOptions([{ name: STATE_MATRIX }], {
+      label: { includeNativeLabel: false },
+    });
+    const labelCounts = new Map<string, number>();
+    for (const o of options) labelCounts.set(o.label, (labelCounts.get(o.label) ?? 0) + 1);
+    return options.map((o) => {
+      if ((labelCounts.get(o.label) ?? 0) <= 1) return o;
+      const alphabet = ctx.resultPool
+        .getPColumnSpecByRef(o.ref)
+        ?.axesSpec.find((a) => a.domain?.["pl7.app/alphabet"])?.domain?.["pl7.app/alphabet"];
+      const suffix = alphabet === "aminoacid" ? " (aa)" : alphabet === "nucleotide" ? " (nt)" : "";
+      return { ...o, label: o.label + suffix };
+    });
+  })
 
   // Per-sample, per-variant abundance `[sampleId, variantKey]`. The 2-axis filter
   // excludes the known-level `[sampleId, knownVariantKey]` abundance.
@@ -348,6 +374,24 @@ export const platforma = BlockModelV3.create(dataModel)
       : undefined,
   )
 
+  // State-matrix column as a pframe + its id — available straight from the result pool, before
+  // the main workflow runs. The UI reads the parentId axis (idx 1) off it via
+  // getUniqueSourceValuesWithLabels to populate the parent selector; the chosen parent then
+  // scopes the whole plot. Pool-derived (not a workflow output), so it's an input option and the
+  // auto-select of the first parent can't loop back into it.
+  .output("stateMatrixPf", (ctx) => {
+    const { stateMatrixRef } = ctx.data;
+    if (stateMatrixRef === undefined) return undefined;
+    const col = ctx.resultPool.getPColumnByRef(stateMatrixRef);
+    if (col === undefined) return undefined;
+    return ctx.createPFrame([col]);
+  })
+  .output("stateMatrixColId", (ctx) => {
+    const { stateMatrixRef } = ctx.data;
+    if (stateMatrixRef === undefined) return undefined;
+    return ctx.resultPool.getPColumnByRef(stateMatrixRef)?.id;
+  })
+
   // Sample-label column (keyed [sampleId]) anchored on the abundance column's
   // sampleId axis — feeds the sample-selection multiselect. The UI reads this via
   // getSingleColumnData to enumerate {sampleId, label} for the filter.
@@ -455,6 +499,11 @@ export const platforma = BlockModelV3.create(dataModel)
 
   .title(() => "Deep Mutational Scanning")
 
+  // Subtitle: custom label if the user renamed the block, else the selected dataset's name
+  // (snapshotted into data by the UI on selection), else a prompt. The subtitle context is
+  // args-only — it can't resolve the dataset label live — so the name must already be in data.
+  .subtitle((ctx) => ctx.data.customBlockLabel || ctx.data.defaultBlockLabel || NO_DATASET_LABEL)
+
   // Main page is the mutation-enrichment heat map itself (GraphMaker hosts the
   // settings form). The known×sample heat map gets its own page.
   .sections((ctx) => {
@@ -463,7 +512,7 @@ export const platforma = BlockModelV3.create(dataModel)
     ];
     // Needs a baseline + at least one comparison round (see workflow's hasComposition).
     if (ctx.data.roundFrequencyRefs.length >= 2) {
-      sections.push({ type: "link", href: "/composition", label: "Composition Enrichment" });
+      sections.push({ type: "link", href: "/composition", label: "Enrichment Analysis" });
     }
     if (ctx.data.knownAbundanceRef !== undefined) {
       sections.push({ type: "link", href: "/known-heatmap", label: "Known Variants" });

@@ -22,6 +22,7 @@ xsv := import("@platforma-sdk/workflow-tengo:pframes.xsv")
 pframes := import("@platforma-sdk/workflow-tengo:pframes")
 pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
 pt := import("@platforma-sdk/workflow-tengo:pt")
+maps := import("@platforma-sdk/workflow-tengo:maps")
 
 // Join keys must stay byte-identical to the profiler's emitted axis names.
 VARIANT_KEY_AXIS := "pl7.app/variantKey"
@@ -34,6 +35,14 @@ wf.prepare(func(args) {
 	bb.ignoreMissingDomains()
 	// State matrix as the anchor — lets profiler-keyed property ids resolve.
 	bb.addAnchor("main", args.stateMatrixRef)
+	// Per-position region membership [parentId, position] -> region, from the profiler.
+	// addMulti (not addSingle) so it resolves to empty when absent — nt state matrix or a
+	// run with no region scheme — instead of failing. Matched on the state-matrix parentId
+	// (idx 1) + position (idx 2) axes; the body collapses it to a position-keyed track.
+	bb.addMulti({
+		name: "pl7.app/repertoire/regionAnnotation",
+		axes: [{ anchor: "main", idx: 1 }, { anchor: "main", idx: 2 }]
+	}, "regionAnnotation")
 	if !is_undefined(args.abundanceRef) {
 		// Abundance anchor for enrichment/abundance-keyed columns (round frequencies and
 		// enrichment-derived properties), discovered via findColumns on the abundance axis.
@@ -64,7 +73,8 @@ wf.prepare(func(args) {
 
 wf.body(func(args) {
 	valueMode := args.valueMode
-	// Each mode needs its value source; bail out (no heat map) until it is selected.
+	// Each mode needs its value source; bail out (no heat map) until it is selected. The parent
+	// list is not produced here — the UI enumerates parents from the result pool before this runs.
 	if valueMode == "abundance" && is_undefined(args.abundanceRef) {
 		return { outputs: {}, exports: {} }
 	}
@@ -80,8 +90,15 @@ wf.body(func(args) {
 
 	// State-matrix axes, in emitted order [variantKey, parentId, position].
 	parentAxisSpec := stateSpec.axesSpec[1]
-	positionAxisSpec := stateSpec.axesSpec[2]
-	alphabet := positionAxisSpec.domain["pl7.app/alphabet"]
+	alphabet := stateSpec.axesSpec[2].domain["pl7.app/alphabet"]
+	// X-axis (position) label: override the profiler's inherited "Position aa"/"Position nt"
+	// with upper-cased "Position AA"/"Position NT" for the heat map plots. Label is an
+	// annotation (no identity impact); reused across every plot's position axis below.
+	positionAxisSpec := maps.deepMerge(stateSpec.axesSpec[2], {
+		annotations: { "pl7.app/label": (alphabet == "aminoacid") ? "Position AA" : "Position NT" }
+	})
+	// Y-axis (state) label, alphabet-aware: residues for the aa matrix, bases for nt.
+	stateAxisLabel := (alphabet == "aminoacid") ? "Amino Acids" : "Nucleotides"
 
 	// --- Resolve the active filter (drives the "Filtered" facet) ---
 	filter := args.filter
@@ -116,6 +133,14 @@ wf.body(func(args) {
 		cpu(4)
 
 	smDf := ptWf.frame(smTsv, { xsvType: "tsv" })
+
+	// Scope the whole plot to one parent. Everything downstream derives from smDf (heat map
+	// cells, the parent-residue track, composition), so a single filter here makes them all
+	// single-parent — which is what the position-keyed annotation tracks require. The region
+	// track has its own source (bundle column) and is filtered separately below.
+	if !is_undefined(args.selectedParentId) {
+		smDf = smDf.filter(pt.col("parentId").eq(pt.lit(args.selectedParentId)))
+	}
 
 	abDf := undefined
 	if !is_undefined(args.abundanceRef) {
@@ -236,6 +261,49 @@ wf.body(func(args) {
 	}
 
 	resultDf.save("stateHeatmap.tsv")
+
+	// --- Region track (optional) ---
+	// Collapse the profiler's per-position region membership [parentId, position] -> region to
+	// [position] -> region, so it can ride the position (X) axis of the heat map as a GraphMaker
+	// annotation track (annotation columns must be keyed solely by the X axis). Scoped to the
+	// selected parent first, so the position-keyed collapse is exact for that parent. Emitted only
+	// when the profiler supplied region data (aa state matrix with a region scheme); otherwise the
+	// bundle query is empty and no track is produced.
+	regionEntries := columns.getColumns("regionAnnotation")
+	hasRegion := !is_undefined(regionEntries) && len(regionEntries) > 0
+	if hasRegion {
+		rt := pframes.tsvFileBuilder()
+		rt.mem("2GiB")
+		rt.cpu(1)
+		rt.setAxisHeader(PARENT_ID_AXIS, "parentId")
+		rt.setAxisHeader(POSITION_AXIS, "position")
+		rt.add(regionEntries[0], { header: "region" })
+		regionDf := ptWf.frame(rt.build(), { xsvType: "tsv" })
+		if !is_undefined(args.selectedParentId) {
+			regionDf = regionDf.filter(pt.col("parentId").eq(pt.lit(args.selectedParentId)))
+		}
+		regionDf.
+			groupBy("position").
+			agg(pt.col("region").cast("String").first().alias("region")).
+			save("regionByPosition.tsv")
+	}
+
+	// --- Parent-residue track ---
+	// The state matrix's default cell is the parent residue — substitutions/deletions overwrite
+	// it — so per position the parent residue is the state carried by the most variants (by
+	// distinct-variant count). Emit [position] -> parentResidue for a GraphMaker annotation track
+	// that shows the parent sequence under the position axis. Single-parent (one residue per
+	// position); ties broken alphabetically for a deterministic result. Reliable for typical DMS,
+	// where any single position is unmutated in the large majority of variants.
+	smDf.
+		groupBy("position", "state").
+		agg(pt.col("variantKey").count().alias("n")).
+		withColumns(pt.col("n").max().over(["position"]).alias("maxN")).
+		filter(pt.col("n").eq(pt.col("maxN"))).
+		sort(["position", "state"]).
+		groupBy("position").
+		agg(pt.col("state").cast("String").first().alias("parentResidue")).
+		save("parentResidue.tsv")
 
 	// --- Composition-enrichment precalc (optional) ---
 	// Positional composition shift across rounds: log2(round fraction / baseline fraction),
@@ -386,7 +454,7 @@ wf.body(func(args) {
 							"pl7.app/alphabet": alphabet
 						},
 						annotations: {
-							"pl7.app/label": "State",
+							"pl7.app/label": stateAxisLabel,
 							"pl7.app/table/fontFamily": "monospace"
 						}
 					}
@@ -418,6 +486,65 @@ wf.body(func(args) {
 	pf := pframes.pFrameBuilder()
 	for k, v in heatmapCols {
 		pf.add(k, trace.inject(v.spec), v.data)
+	}
+	// Region annotation track: [position] -> region, keyed on the same position axis as the
+	// heat map value column so GraphMaker aligns it under the X axis. String value → discrete
+	// annotation. Rides along in stateHeatmapPf; the UI presets it as the annotationsX track.
+	if hasRegion {
+		regionCols := xsv.importFile(
+			ptResult.getFile("regionByPosition.tsv"),
+			"tsv",
+			{
+				axes: [{ column: "position", spec: positionAxisSpec }],
+				columns: [{
+					column: "region",
+					spec: {
+						name: "pl7.app/repertoire/regionAnnotation",
+						valueType: "String",
+						annotations: {
+							"pl7.app/label": "Region"
+						}
+					}
+				}],
+				storageFormat: "Parquet",
+				partitionKeyLength: 0
+			},
+			{ splitDataAndSpec: true }
+		)
+		for k, v in regionCols {
+			pf.add("region/" + k, trace.inject(v.spec), v.data)
+		}
+	}
+	// Parent-residue track: [position] -> parentResidue, keyed on the same position axis as the
+	// heat map value column. String value → discrete annotation coloured by residue; the residue
+	// shows in the tooltip. Rides along in stateHeatmapPf; the UI presets it as an annotationsX
+	// track alongside the region track.
+	parentCols := xsv.importFile(
+		ptResult.getFile("parentResidue.tsv"),
+		"tsv",
+		{
+			axes: [{ column: "position", spec: positionAxisSpec }],
+			columns: [{
+				column: "parentResidue",
+				spec: {
+					name: "pl7.app/repertoire/parentResidue",
+					valueType: "String",
+					domain: {
+						"pl7.app/alphabet": alphabet
+					},
+					annotations: {
+						"pl7.app/label": (alphabet == "aminoacid") ? "Parent AA" : "Parent nt",
+						"pl7.app/table/fontFamily": "monospace"
+					}
+				}
+			}],
+			storageFormat: "Parquet",
+			partitionKeyLength: 0
+		},
+		{ splitDataAndSpec: true }
+	)
+	for k, v in parentCols {
+		pf.add("parent/" + k, trace.inject(v.spec), v.data)
 	}
 	stateHeatmapPf := pf.build()
 
@@ -456,7 +583,7 @@ wf.body(func(args) {
 								"pl7.app/alphabet": alphabet
 							},
 							annotations: {
-								"pl7.app/label": "State",
+								"pl7.app/label": stateAxisLabel,
 								"pl7.app/table/fontFamily": "monospace"
 							}
 						}
