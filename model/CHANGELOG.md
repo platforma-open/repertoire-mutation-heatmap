@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.model
 
+## 1.1.2
+
+### Patch Changes
+
+- ace95ed: Release new version
+
 ## 1.1.1
 
 ### Patch Changes

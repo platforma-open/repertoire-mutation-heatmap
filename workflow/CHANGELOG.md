@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.workflow
 
+## 1.1.3
+
+### Patch Changes
+
+- ace95ed: Release new version
+
 ## 1.1.2
 
 ### Patch Changes

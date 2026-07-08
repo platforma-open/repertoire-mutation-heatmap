@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.block
 
+## 1.1.1
+
+### Patch Changes
+
+- ace95ed: Release new version
+
 ## 1.1.0
 
 ### Minor Changes
