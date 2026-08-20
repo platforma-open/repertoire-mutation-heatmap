@@ -1,22 +1,21 @@
 // Deep Mutational Scanning — workflow.
 //
-// Heat map 1 precalc. The profiler emits the per-variant state matrix
-// [variantKey, parentId, position] -> state and per-sample abundance
-// [sampleId, variantKey] -> count. This block collapses the variant axis: for each
-// (parentId, position, state) cell it aggregates over the variants carrying state
-// `s` at position `p`.
+// The profiler emits the per-variant state matrix [variantKey, parentId, position] -> state.
+// This block reads it, scopes everything to one parent, and precalculates two position ×
+// residue maps. Neither is a population marginal: no view here aggregates over the variants
+// carrying a residue. The aggregated state heat map that did was removed.
 //
-// Two value modes:
-//   abundance — cell = SUM of per-variant abundance.
-//   property  — cell = MEAN of a per-variant property (e.g. a Tite-Seq Kd).
+// Mutation landscape. Per-variant score columns plotted over the single-mutant subset only, so
+// a cell is one variant's own value rather than a summary over every genetic background the
+// substitution co-occurs with. Output: [score, parentId, position, state] -> cellValue, with
+// `score` as the facet axis. Present only when score columns are selected.
 //
-// Output: [parentId, position, state] -> heatmapValue, for GraphMaker
-// (X=position, Y=state, tab=parent).
+// Enrichment analysis. Per-position, per-residue log2 fold change of residue composition in
+// each selection round against the baseline round. Output:
+// [round, parentId, position, state] -> log2fc. Needs at least two rounds.
 //
-// The single-mutant landscape is the second precalc and the counterpart to that marginal: it
-// plots per-variant score columns at position × residue over the single-mutant subset only, so a
-// cell is one variant's own value rather than a summary over every background the substitution
-// co-occurs with. Output: [score, parentId, position, state] -> cellValue (facet = score).
+// Both maps ride alongside two position-keyed annotation tracks — region membership and the
+// parent residue — which GraphMaker renders under the X axis.
 
 wf := import("@platforma-sdk/workflow-tengo:workflow")
 xsv := import("@platforma-sdk/workflow-tengo:pframes.xsv")
@@ -29,7 +28,6 @@ maps := import("@platforma-sdk/workflow-tengo:maps")
 VARIANT_KEY_AXIS := "pl7.app/variantKey"
 PARENT_ID_AXIS := "pl7.app/repertoire/parentId"
 POSITION_AXIS := "pl7.app/repertoire/position"
-SAMPLE_ID_AXIS := "pl7.app/sampleId"
 
 wf.prepare(func(args) {
 	bb := wf.createPBundleBuilder()
@@ -44,37 +42,27 @@ wf.prepare(func(args) {
 		name: "pl7.app/repertoire/regionAnnotation",
 		axes: [{ anchor: "main", idx: 1 }, { anchor: "main", idx: 2 }]
 	}, "regionAnnotation")
-	if !is_undefined(args.abundanceRef) {
-		// Abundance anchor for enrichment/abundance-keyed columns (round frequencies and
-		// enrichment-derived properties), discovered via findColumns on the abundance axis.
-		// The name must match the model's discovery anchors.
-		bb.addAnchor("freqAnchor", args.abundanceRef)
-		bb.addSingle(args.abundanceRef, "abundance")
-	}
-	// Per-variant property used as the cell value (property mode).
-	if args.valueMode == "property" && !is_undefined(args.propertyRef) {
-		bb.addSingle(args.propertyRef, "valueProperty")
-	}
 	// Per-variant mutation count from the profiler, keyed on the state matrix's variantKey axis
-	// (idx 0). Drives the single-mutant landscape's `mutationCount == 1` predicate. addMulti so a
+	// (idx 0). Drives the mutation landscape's `mutationCount == 1` predicate. addMulti so a
 	// run that did not emit it resolves to empty and the landscape is simply skipped, rather than
 	// failing the whole workflow.
 	bb.addMulti({
 		name: "pl7.app/repertoire/mutationCount",
 		axes: [{ anchor: "main", idx: 0 }]
 	}, "mutationCount")
-	// Per-variant score columns for the single-mutant landscape. Same shape as the round
-	// frequencies: ids come from the model's findColumns discovery (anchored on `main` and
-	// `freqAnchor`), added without a query key and retrieved by the ref itself in the body.
+	// Per-variant score columns for the mutation landscape. Same shape as the round
+	// frequencies: ids come from the model's discover() (anchored on `main`), added without a
+	// query key and retrieved by the ref itself in the body.
 	if !is_undefined(args.scoreRefs) {
 		for ref in args.scoreRefs {
 			bb.addSingle(ref)
 		}
 	}
 	// Per-round frequency columns from the enrichment block (composition-enrichment view).
-	// Anchored on the abundance ref (freqAnchor, added above); ids come from findColumns and
-	// are added without a query key, retrieved by the ref itself in the body.
-	if !is_undefined(args.abundanceRef) && !is_undefined(args.roundFrequencyRefs) && len(args.roundFrequencyRefs) >= 2 {
+	// Anchored on `main` like the scores: these are keyed on variantKey alone, which the state
+	// matrix carries. Ids come from the model's discover() and are added without a query key,
+	// retrieved by the ref itself in the body.
+	if !is_undefined(args.roundFrequencyRefs) && len(args.roundFrequencyRefs) >= 2 {
 		for ref in args.roundFrequencyRefs {
 			bb.addSingle(ref)
 		}
@@ -85,18 +73,10 @@ wf.prepare(func(args) {
 })
 
 wf.body(func(args) {
-	valueMode := args.valueMode
-	// Each mode needs its value source; bail out (no heat map) until it is selected. The parent
-	// list is not produced here — the UI enumerates parents from the result pool before this runs.
-	if valueMode == "abundance" && is_undefined(args.abundanceRef) {
-		return { outputs: {}, exports: {} }
-	}
-	if valueMode == "property" && is_undefined(args.propertyRef) {
-		return { outputs: {}, exports: {} }
-	}
-
-	normalized := valueMode == "abundance" && args.normalize
-
+	// No early bail-out on a missing value source: every view here is optional and guarded on
+	// its own inputs, so a run with only a dataset and a parent legitimately produces just the
+	// position-keyed annotation tracks. The parent list is not produced here either — the UI
+	// enumerates parents from the result pool before this runs.
 	columns := args.columns
 	stateSpec := columns.getSpec(args.stateMatrixRef)
 	stateCol := columns.getColumn(args.stateMatrixRef)
@@ -148,56 +128,6 @@ wf.body(func(args) {
 		smDf = smDf.filter(pt.col("parentId").eq(pt.lit(args.selectedParentId)))
 	}
 
-	abDf := undefined
-	if !is_undefined(args.abundanceRef) {
-		abDf = ptWf.frame(pt.p.column("abundance", columns.getColumn("abundance"))).select(
-			pt.axis(SAMPLE_ID_AXIS).alias("sampleId"),
-			pt.axis(VARIANT_KEY_AXIS).alias("variantKey"),
-			pt.col("abundance")
-		)
-	}
-
-	// Value-mode property frame [variantKey -> variantValue] (property mode).
-	valuePropDf := undefined
-	if valueMode == "property" {
-		valuePropDf = ptWf.frame(pt.p.column("vProp", columns.getColumn("valueProperty"))).select(
-			pt.axis(VARIANT_KEY_AXIS).alias("variantKey"),
-			pt.col("vProp").alias("variantValue")
-		)
-	}
-
-	// Per-variant value frame [variantKey -> variantValue].
-	variantValueDf := undefined
-	if valueMode == "abundance" {
-		variantValueDf = abDf.groupBy("variantKey").agg(pt.col("abundance").sum().alias("variantValue"))
-	} else {
-		// Property mode: value is the per-variant property (sample-independent).
-		variantValueDf = valuePropDf
-	}
-
-	// Collapse the per-variant value frame to [parentId, position, state] — the population
-	// marginal. Inner join drops variants with no value.
-	grouped := smDf.join(variantValueDf, { leftOn: ["variantKey"], rightOn: ["variantKey"], how: "inner" }).
-		groupBy("parentId", "position", "state")
-	resultDf := undefined
-	if valueMode == "abundance" {
-		resultDf = grouped.agg(pt.col("variantValue").sum().alias("cellValue"))
-	} else {
-		resultDf = grouped.agg(pt.col("variantValue").mean().alias("cellValue"))
-	}
-
-	// Normalize each cell by its (parentId, position) column total → state frequency.
-	// Each position column then sums to 1 — the canonical enrichment readout.
-	if normalized {
-		resultDf = resultDf.withColumns(
-			pt.col("cellValue").
-				truediv(pt.col("cellValue").sum().over(["parentId", "position"])).
-				alias("cellValue")
-		)
-	}
-
-	resultDf.save("stateHeatmap.tsv")
-
 	// --- Region track (optional) ---
 	// Collapse the profiler's per-position region membership [parentId, position] -> region to
 	// [position] -> region, so it can ride the position (X) axis of the heat map as a GraphMaker
@@ -239,11 +169,12 @@ wf.body(func(args) {
 		agg(pt.col("state").cast("String").first().alias("parentResidue"))
 	parentResDf.save("parentResidue.tsv")
 
-	// --- Single-mutant landscape precalc (optional) ---
+	// --- Mutation landscape precalc (optional) ---
 	// The singleton cell mode: a cell holds the value of the ONE single-mutant variant carrying
-	// exactly that substitution, taken directly with no aggregation — as opposed to the population
-	// marginal above, which pools every variant carrying the residue and so mixes in the genetic
-	// backgrounds the substitution co-occurs with.
+	// exactly that substitution, taken directly with no aggregation. The alternative would be a
+	// population marginal, pooling every variant carrying the residue — which mixes in the
+	// genetic backgrounds the substitution co-occurs with, and is why this block no longer
+	// draws one.
 	//
 	// Two things pin a single mutant to its one real cell. First `mutationCount == 1` selects the
 	// variants. Then the substitution has to be located: the state matrix carries the PARENT
@@ -252,7 +183,7 @@ wf.body(func(args) {
 	// (derived above from the full population) keeps only the position where the variant actually
 	// differs — exactly one row per variant.
 	//
-	// Cells with no covering single-mutant variant are ABSENT, never filled from the marginal.
+	// Cells with no covering single-mutant variant are ABSENT, never filled from a fallback.
 	scoreRefs := args.scoreRefs
 	mutCountEntries := columns.getColumns("mutationCount")
 	hasLandscape := !is_undefined(scoreRefs) && len(scoreRefs) > 0 &&
@@ -417,89 +348,15 @@ wf.body(func(args) {
 
 	ptResult := ptWf.run()
 
-	// --- Value column spec, mode-dependent (name stays mode-neutral so the UI
-	// finds it either way) ---
-	valueAnnotations := undefined
-	if valueMode == "property" {
-		propLabel := "property"
-		vSpec := columns.getSpec("valueProperty")
-		if !is_undefined(vSpec) && !is_undefined(vSpec.annotations) && !is_undefined(vSpec.annotations["pl7.app/label"]) {
-			propLabel = vSpec.annotations["pl7.app/label"]
-		}
-		valueAnnotations = {
-			"pl7.app/label": "Mean " + propLabel
-		}
-	} else if normalized {
-		valueAnnotations = {
-			"pl7.app/isAbundance": "true",
-			"pl7.app/abundance/aggregated": "true",
-			"pl7.app/abundance/normalized": "true",
-			"pl7.app/label": "State frequency",
-			"pl7.app/format": ".2p"
-		}
-	} else {
-		valueAnnotations = {
-			"pl7.app/isAbundance": "true",
-			"pl7.app/abundance/aggregated": "true",
-			"pl7.app/label": "Aggregated abundance"
-		}
-	}
-
-	// --- Import back: [parentId, position, state] -> heatmapValue ---
-	// parentId / position inherited verbatim from the profiler; state is a block-local
-	// axis (terminal output — rendered by GraphMaker, not joined).
-	heatmapCols := xsv.importFile(
-		ptResult.getFile("stateHeatmap.tsv"),
-		"tsv",
-		{
-			axes: [
-				{ column: "parentId", spec: parentAxisSpec },
-				{ column: "position", spec: positionAxisSpec },
-				{
-					column: "state",
-					spec: {
-						name: "pl7.app/repertoire/state",
-						type: "String",
-						domain: {
-							"pl7.app/alphabet": alphabet
-						},
-						annotations: {
-							"pl7.app/label": stateAxisLabel,
-							"pl7.app/table/fontFamily": "monospace"
-						}
-					}
-				}
-			],
-			columns: [{
-				column: "cellValue",
-				spec: {
-					name: "pl7.app/repertoire/heatmapValue",
-					valueType: "Double",
-					domain: {
-						"pl7.app/alphabet": alphabet
-					},
-					annotations: valueAnnotations
-				}
-			}],
-			storageFormat: "Parquet",
-			partitionKeyLength: 0
-		},
-		{ splitDataAndSpec: true }
-	)
-
 	trace := pSpec.makeTrace(stateSpec, {
 		type: "milaboratories.repertoire-mutation-heatmap",
 		importance: 50,
 		label: "Deep Mutational Scanning"
 	})
 
-	pf := pframes.pFrameBuilder()
-	for k, v in heatmapCols {
-		pf.add(k, trace.inject(v.spec), v.data)
-	}
 	// Region annotation track: [position] -> region, keyed on the same position axis as the
-	// heat map value column so GraphMaker aligns it under the X axis. String value → discrete
-	// annotation. Added to both the state and composition frames; the UI presets it as an
+	// value columns, so GraphMaker aligns it under the X axis. String value → discrete
+	// annotation. Added to both the landscape and composition frames; the UI presets it as an
 	// annotationsX track on each page.
 	regionCols := undefined
 	if hasRegion {
@@ -523,14 +380,11 @@ wf.body(func(args) {
 			},
 			{ splitDataAndSpec: true }
 		)
-		for k, v in regionCols {
-			pf.add("region/" + k, trace.inject(v.spec), v.data)
-		}
 	}
 	// Parent-residue track: [position] -> parentResidue, keyed on the same position axis as the
-	// heat map value column. String value → discrete annotation coloured by residue; the residue
-	// shows in the tooltip. Rides along in stateHeatmapPf; the UI presets it as an annotationsX
-	// track alongside the region track.
+	// value columns. String value → discrete annotation coloured by residue; the residue shows
+	// in the tooltip. Added to the same frames as the region track, which the UI presets as
+	// annotationsX alongside it.
 	parentCols := xsv.importFile(
 		ptResult.getFile("parentResidue.tsv"),
 		"tsv",
@@ -555,14 +409,7 @@ wf.body(func(args) {
 		},
 		{ splitDataAndSpec: true }
 	)
-	for k, v in parentCols {
-		pf.add("parent/" + k, trace.inject(v.spec), v.data)
-	}
-	stateHeatmapPf := pf.build()
-
-	outputs := {
-		stateHeatmapPf: pframes.exportFrame(stateHeatmapPf)
-	}
+	outputs := {}
 
 	// --- Single-mutant landscape import + export (optional) ---
 	// [score, parentId, position, state] -> cellValue. parentId / position inherited from the

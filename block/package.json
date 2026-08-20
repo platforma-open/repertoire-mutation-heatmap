@@ -46,7 +46,7 @@
       "logo": "file:logos/block-logo.png",
       "url": "https://github.com/platforma-open/repertoire-mutation-heatmap",
       "support": "mailto:support@milaboratories.com",
-      "description": "Visualizes deep mutational scanning libraries as position × residue mutation-enrichment heatmaps over a live-filtered variant subset, plus a known-variant × sample abundance heatmap.",
+      "description": "Maps deep mutational scanning libraries at position × residue: a mutation landscape of per-variant scores over single mutants, and per-position residue enrichment across selection rounds.",
       "longDescription": "file:docs/description.md",
       "tags": [
         "downstream",

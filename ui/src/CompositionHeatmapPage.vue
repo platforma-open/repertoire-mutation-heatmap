@@ -45,12 +45,22 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
 </script>
 
 <template>
+  <!--
+    `categorical: 'triadic'` matches the synthetic-repertoire-profiler block, whose state
+    heat map renders the same two annotation tracks. It is the only categorical palette
+    with enough colours for a residue alphabet: it carries all 27 base colours, where
+    light/bright/dark carry 9 each and paired 18. Discrete colours are assigned
+    `colors[idx % colors.length]`, so the 9-colour default reuses a colour every 9th
+    residue — visible repetition across the 20 residues plus gap on the Parent AA track.
+    Past 27 distinct states it still wraps; graph-maker honours only a palette NAME for
+    annotation tracks, not an explicit residue->colour map.
+  -->
   <GraphMaker
     v-model="app.model.data.compositionHeatmapState"
     chartType="heatmap"
     :p-frame="app.model.outputs.compositionHeatmapPf"
     :defaultOptions="defaultOptions"
-    :defaultPalette="{ continuous: 'blue_red' }"
+    :defaultPalette="{ continuous: 'blue_red', categorical: 'triadic' }"
     :readonly-inputs="['x', 'y', 'value', 'tabBy', 'facetBy']"
     :status-text="{
       noPframe: {
