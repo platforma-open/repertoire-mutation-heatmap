@@ -28,15 +28,14 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
   const valueCol = pCols.find((p) => p.spec.name === "pl7.app/repertoire/heatmapValue");
   if (!valueCol || !valueCol.spec.axesSpec) return undefined;
 
-  // Import schema axis order: [subset, parentId, position, state].
+  // Import schema axis order: [parentId, position, state].
   const axes = valueCol.spec.axesSpec;
   const options: PredefinedGraphOption<"heatmap">[] = [
     { inputName: "value", selectedSource: valueCol.spec },
-    { inputName: "x", selectedSource: axes[2] }, // position
-    { inputName: "y", selectedSource: axes[3] }, // state
-    { inputName: "tabBy", selectedSource: axes[1] }, // parentId — one tab per parent
-    { inputName: "facetBy", selectedSource: axes[0] }, // subset — All variants vs Filtered, side by side
-    { inputName: "tooltipContent", selectedSource: axes[3] }, // show State in the tooltip
+    { inputName: "x", selectedSource: axes[1] }, // position
+    { inputName: "y", selectedSource: axes[2] }, // state
+    { inputName: "tabBy", selectedSource: axes[0] }, // parentId — one tab per parent
+    { inputName: "tooltipContent", selectedSource: axes[2] }, // show State in the tooltip
   ];
 
   // Region membership as a discrete annotation track under the position (X) axis — colored

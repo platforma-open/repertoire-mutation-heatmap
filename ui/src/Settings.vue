@@ -1,10 +1,6 @@
 <script setup lang="ts">
-import type {
-  Alphabet,
-  VariantFilter,
-} from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import type { PObjectId, SUniversalPColumnId } from "@platforma-sdk/model";
-import { getSingleColumnData, getUniqueSourceValuesWithLabels } from "@platforma-sdk/model";
+import { getUniqueSourceValuesWithLabels } from "@platforma-sdk/model";
 import {
   PlAccordionSection,
   PlCheckbox,
@@ -12,7 +8,6 @@ import {
   PlDropdownMulti,
   PlDropdownRef,
   PlElementList,
-  PlNumberField,
   PlTooltip,
 } from "@platforma-sdk/ui-vue";
 import { computed, ref, watch } from "vue";
@@ -20,12 +15,18 @@ import { useApp } from "./app";
 
 const app = useApp();
 
-const filterOpen = ref(false);
+const landscapeOpen = ref(false);
 const compositionOpen = ref(false);
 
 // Human label for a selected round-frequency column, from the discovery options.
 function roundLabel(ref: SUniversalPColumnId): string {
   const opts = app.model.outputs.roundFrequencyOptions ?? [];
+  return opts.find((o) => o.value === ref)?.label ?? String(ref);
+}
+
+// Human label for a selected score column, from the discovery options.
+function scoreLabel(ref: SUniversalPColumnId): string {
+  const opts = app.model.outputs.scoreOptions ?? [];
   return opts.find((o) => o.value === ref)?.label ?? String(ref);
 }
 
@@ -45,46 +46,6 @@ function onSelectStateMatrix(ref: StateMatrixRef | undefined) {
       (o) => ref && o.ref.blockId === ref.blockId && o.ref.name === ref.name,
     )?.label ?? "";
 }
-
-// Replace the whole filter object on every edit (data is persisted server-side;
-// keep writes immutable rather than mutating nested fields in place).
-function patchFilter(patch: Partial<VariantFilter>) {
-  app.model.data.filter = { ...app.model.data.filter, ...patch };
-}
-
-function setRangeMin(v: number | undefined) {
-  patchFilter({ range: [v ?? null, app.model.data.filter.range?.[1] ?? null] });
-}
-function setRangeMax(v: number | undefined) {
-  patchFilter({ range: [app.model.data.filter.range?.[0] ?? null, v ?? null] });
-}
-
-// Enumerate {sampleId, label} for the sample-selection multiselect from the
-// abundance column's sampleId axis (via the anchored label column).
-const sampleOptions = ref<{ value: string; label: string }[]>([]);
-watch(
-  () => ({
-    pframe: app.model.outputs.sampleLabelPframe,
-    colId: app.model.outputs.sampleLabelColId,
-  }),
-  async ({ pframe, colId }) => {
-    if (!pframe || !colId) {
-      sampleOptions.value = [];
-      return;
-    }
-    try {
-      const { data, axesData } = await getSingleColumnData(pframe, colId as PObjectId);
-      const keys = (Object.values(axesData)[0] ?? []) as unknown[];
-      const labels = data as unknown[];
-      sampleOptions.value = keys
-        .map((k, i) => ({ value: String(k), label: String(labels[i] ?? k) }))
-        .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
-    } catch {
-      sampleOptions.value = [];
-    }
-  },
-  { immediate: true },
-);
 
 // Enumerate the available parents from the state matrix's parentId axis (idx 1) — straight from
 // the result pool, so the selector is populated before the main workflow runs. Then auto-select
@@ -193,9 +154,9 @@ watch(
       Normalize to per-position residue frequency
     </PlCheckbox>
     <template #tooltip>
-      Show each cell as the fraction of the variant subset carrying that residue at that position,
-      so every position column adds up to 100% (the enrichment view). Turn off to colour by raw
-      summed abundance instead.
+      Show each cell as the fraction of the variant population carrying that residue at that
+      position, so every position column adds up to 100% (the enrichment view). Turn off to colour
+      by raw summed abundance instead.
     </template>
   </PlTooltip>
 
@@ -212,51 +173,35 @@ watch(
     </template>
   </PlDropdownRef>
 
-  <!-- Subset filter: a filtered facet shown beside the unfiltered baseline. -->
-  <PlAccordionSection v-model="filterOpen" label="Subset filter (vs baseline)">
+  <!-- Single-mutant landscape: per-variant scores plotted at their own substitution's cell. -->
+  <PlAccordionSection v-model="landscapeOpen" label="Single Mutant Landscape">
     <PlDropdownMulti
-      :model-value="app.model.data.filter.sampleSelection ?? []"
-      :options="sampleOptions"
-      label="Samples"
+      :model-value="app.model.data.scoreRefs"
+      :options="app.model.outputs.scoreOptions ?? []"
+      label="Score columns"
       clearable
-      @update:model-value="(v: string[]) => patchFilter({ sampleSelection: v })"
+      @update:model-value="(v: SUniversalPColumnId[]) => (app.model.data.scoreRefs = v)"
     >
       <template #tooltip>
-        Build the "Filtered" heatmap from only these samples, shown next to the all-samples
-        baseline. Leave empty to include every sample.
+        Per-variant scores to plot per position. Only single-mutant variants are used, so each cell
+        is one variant's own score rather than an average over every variant carrying that residue.
+        Cells no single mutant covers are left empty. Adds the "Single Mutant Landscape" page.
       </template>
     </PlDropdownMulti>
 
-    <PlDropdown
-      :model-value="app.model.data.filter.propertyRef"
-      :options="app.model.outputs.propertyOptions ?? []"
-      label="Filter by property"
-      clearable
-      @update:model-value="
-        (v?: string) =>
-          patchFilter({ propertyRef: (v as VariantFilter['propertyRef']) ?? undefined })
-      "
+    <PlElementList
+      v-if="app.model.data.scoreRefs.length > 0"
+      v-model:items="app.model.data.scoreRefs"
     >
-      <template #tooltip>
-        Keep only variants whose per-variant property (e.g. a Tite-Seq Kd) falls in the range below.
-        Drives the "Filtered" facet.
-      </template>
-    </PlDropdown>
-
-    <PlNumberField
-      v-if="app.model.data.filter.propertyRef"
-      :model-value="app.model.data.filter.range?.[0] ?? undefined"
-      label="Min"
-      :clearable="true"
-      @update:model-value="setRangeMin"
-    />
-    <PlNumberField
-      v-if="app.model.data.filter.propertyRef"
-      :model-value="app.model.data.filter.range?.[1] ?? undefined"
-      label="Max"
-      :clearable="true"
-      @update:model-value="setRangeMax"
-    />
+      <template #item-title="{ item }">{{ scoreLabel(item) }}</template>
+    </PlElementList>
+    <div
+      v-if="app.model.data.scoreRefs.length > 1"
+      style="font-size: 12px; color: #888; margin-top: -8px"
+    >
+      Panels render in this order; drag to reorder. All panels share one colour scale, so compare
+      scores measured on the same units.
+    </div>
   </PlAccordionSection>
 
   <!-- Composition-enrichment view: positional log2 fold change across selection rounds. -->

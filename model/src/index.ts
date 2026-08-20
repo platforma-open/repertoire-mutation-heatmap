@@ -52,24 +52,6 @@ export type Alphabet = "aminoacid" | "nucleotide";
 /** Cell colour: summed abundance, or averaged per-variant property. */
 export type ValueMode = "abundance" | "property";
 
-/** Variant-subset membership filter. */
-export type Membership = "all" | "known";
-
-/**
- * Variant-subset filter applied before aggregation.
- * Changing it re-runs the precalc workflow over the new subset.
- */
-export type VariantFilter = {
-  /** Per-variant property column to filter on (e.g. a Tite-Seq Kd). */
-  propertyRef?: SUniversalPColumnId;
-  /** Inclusive [min, max] range over `propertyRef`; null = unbounded. */
-  range?: [number | null, number | null];
-  /** Samples/rounds to restrict to; empty/undefined = all samples. */
-  sampleSelection?: string[];
-  /** Keep all variants, or only those assigned to a known variant. */
-  membership: Membership;
-};
-
 /** Workflow-facing args, derived from `BlockData`. */
 export type BlockArgs = {
   /** Profiler state matrix `[variantKey, parentId, position] -> state`. */
@@ -95,11 +77,15 @@ export type BlockArgs = {
    * so this is a small value (default 1e-6), not a count pseudocount.
    */
   compositionEpsilon: number;
+  /**
+   * Per-variant score columns plotted in the single-mutant landscape, in the user's chosen
+   * order (which becomes the facet order). Empty = landscape off.
+   */
+  scoreRefs: SUniversalPColumnId[];
   level: Alphabet;
   valueMode: ValueMode;
   /** Per-(parent, position) frequency normalization (abundance mode only). */
   normalize: boolean;
-  filter: VariantFilter;
 };
 
 /** UI view state kept out of the workflow args. */
@@ -107,6 +93,7 @@ export type BlockUiState = {
   stateHeatmapState: GraphMakerState;
   knownHeatmapState: GraphMakerState;
   compositionHeatmapState: GraphMakerState;
+  singleMutantHeatmapState: GraphMakerState;
 };
 
 /** Unified persisted data: workflow-relevant selections + UI view state. */
@@ -126,32 +113,20 @@ export type BlockData = {
   roundFrequencyRefs: SUniversalPColumnId[];
   /** Fraction-space epsilon for the composition ratio (default 1e-6). */
   compositionEpsilon: number;
+  /** Ordered per-variant score columns for the single-mutant landscape. Empty = view off. */
+  scoreRefs: SUniversalPColumnId[];
   level: Alphabet;
   valueMode: ValueMode;
   normalize: boolean;
-  filter: VariantFilter;
 } & BlockUiState;
-
-/** Strip empty bounds / empty selection; lex-sort samples for a stable cache key. */
-function canonicalizeFilter(f: VariantFilter): VariantFilter {
-  const out: VariantFilter = { membership: f.membership ?? "all" };
-  if (f.propertyRef) out.propertyRef = f.propertyRef;
-  if (f.range && (f.range[0] != null || f.range[1] != null)) {
-    out.range = [f.range[0] ?? null, f.range[1] ?? null];
-  }
-  if (f.sampleSelection && f.sampleSelection.length > 0) {
-    out.sampleSelection = [...f.sampleSelection].sort();
-  }
-  return out;
-}
 
 const dataModel = new DataModelBuilder({ kind }).from<BlockData>("v1").init(() => ({
   level: "aminoacid" as const,
   valueMode: "abundance" as const,
   normalize: true,
-  filter: { membership: "all" as const },
   roundFrequencyRefs: [],
   compositionEpsilon: 1e-6,
+  scoreRefs: [],
   stateHeatmapState: {
     title: "Deep Mutational Scanning",
     template: "heatmap",
@@ -171,7 +146,15 @@ const dataModel = new DataModelBuilder({ kind }).from<BlockData>("v1").init(() =
     // height so the labels have room to render — the state alphabet is large
     // (single residues + multi-residue insertions + gap/stop), so auto-fit
     // squeezes rows too thin to label. The chart grows tall and scrolls.
+    //
+    // Pin the position (X) cell width to match, so cells are square and stay readable
+    // rather than being compressed to slivers across a long parent. The chart grows wide
+    // and scrolls, the same trade already taken on Y. Users can override live via the
+    // chart's Axes settings (Cell width mode → custom, 4–50px).
     axesSettings: {
+      axisX: {
+        cellSize: 20,
+      },
       axisY: {
         hideAxisLabels: false,
         cellSize: 20,
@@ -197,6 +180,29 @@ const dataModel = new DataModelBuilder({ kind }).from<BlockData>("v1").init(() =
       },
     },
   },
+  singleMutantHeatmapState: {
+    title: "Single Mutant Landscape",
+    template: "heatmap",
+    currentTab: null,
+    // Cells are per-variant scores taken directly, not counts — GraphMaker's row z-score and
+    // transform would both distort them, and the values arrive already normalized upstream.
+    layersSettings: {
+      heatmap: {
+        normalizationDirection: null,
+        transform: null,
+      },
+    },
+    // Square cells on the shared position axis, as on the main heatmap.
+    axesSettings: {
+      axisX: {
+        cellSize: 20,
+      },
+      axisY: {
+        hideAxisLabels: false,
+        cellSize: 20,
+      },
+    },
+  },
   compositionHeatmapState: {
     title: "Enrichment Analysis",
     template: "heatmap",
@@ -210,7 +216,11 @@ const dataModel = new DataModelBuilder({ kind }).from<BlockData>("v1").init(() =
         transform: null,
       },
     },
+    // Square cells on the shared position axis, as on the main heatmap.
     axesSettings: {
+      axisX: {
+        cellSize: 20,
+      },
       axisY: {
         hideAxisLabels: false,
         cellSize: 20,
@@ -247,10 +257,11 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
       level: data.level,
       valueMode: "abundance",
       normalize: data.normalize,
-      filter: canonicalizeFilter(data.filter),
       // Order is meaningful (baseline first) — pass through verbatim, do not sort.
       roundFrequencyRefs: data.roundFrequencyRefs ?? [],
       compositionEpsilon: data.compositionEpsilon ?? 1e-6,
+      // Order is the facet order the user arranged — pass through verbatim, do not sort.
+      scoreRefs: data.scoreRefs ?? [],
     };
   })
 
@@ -258,9 +269,10 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   // `kind/src/index.ts`), so there is nothing to project and a project exported as a
   // template brings this block back default-initialized — the dataset and every setting
   // are re-picked by hand. Widening this is a deliberate follow-up, not an oversight: the
-  // `PlRef` fields and the scalar knobs are templatable, while the discovered
-  // `SUniversalPColumnId` selections are anchored against one project's upstream columns
-  // and the SDK promises template rewriting for `PlRef` only.
+  // `PlRef` fields and the four scalar knobs are templatable, while the discovered
+  // `SUniversalPColumnId` selections (property, scores, round frequencies) are anchored
+  // against one project's upstream columns and the SDK promises template rewriting for
+  // `PlRef` only.
   .templateParams(() => ({}))
 
   // --- Input selection from the result pool ---
@@ -317,13 +329,17 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     );
   })
 
-  // Per-variant numeric property columns for the `property` value-mode and the
-  // property-range filter. Discovered via discover() (not getCanonicalOptions — see
-  // roundFrequencyOptions for why) anchored on BOTH the state matrix (profiler-keyed
-  // properties, e.g. mutations) and the abundance (enrichment-keyed properties). The
-  // anchor names `main` / `freqAnchor` must match the workflow's `bb.addAnchor(...)`.
-  // Numeric only (A-0015) — a mean of the property is what a cell shows.
-  .output("propertyOptions", (ctx) => {
+  // Per-variant numeric score columns for the single-mutant landscape. Discovered via
+  // discover() (not getCanonicalOptions — see roundFrequencyOptions for why) anchored on BOTH
+  // the state matrix (profiler-keyed properties, e.g. mutation counts) and the abundance
+  // (enrichment-keyed scores). The anchor names `main` / `freqAnchor` must match the workflow's
+  // `bb.addAnchor(...)`.
+  //
+  // Numeric only — a cell holds one variant's score. NOT restricted to `pl7.app/isScore`: no
+  // shipped block emits a variant-keyed column carrying that annotation yet (repertoire-score is
+  // clonotype-keyed), so filtering on it would leave the dropdown empty. Revisit once the
+  // bin-score block lands.
+  .output("scoreOptions", (ctx) => {
     const stateMatrixRef = ctx.data.stateMatrixRef;
     if (stateMatrixRef === undefined) return undefined;
     const stateSpec = ctx.resultPool.getPColumnSpecByRef(stateMatrixRef);
@@ -448,27 +464,6 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     return ctx.resultPool.getPColumnByRef(stateMatrixRef)?.id;
   })
 
-  // Sample-label column (keyed [sampleId]) anchored on the abundance column's
-  // sampleId axis — feeds the sample-selection multiselect. The UI reads this via
-  // getSingleColumnData to enumerate {sampleId, label} for the filter.
-  .output("sampleLabelPframe", (ctx) => {
-    const { abundanceRef } = ctx.data;
-    if (abundanceRef === undefined) return undefined;
-    const cols = ctx.resultPool.getAnchoredPColumns({ main: abundanceRef }, [
-      { axes: [{ anchor: "main", idx: 0 }], name: "pl7.app/label" },
-    ]);
-    if (!cols || cols.length === 0) return undefined;
-    return ctx.createPFrame(cols);
-  })
-  .output("sampleLabelColId", (ctx) => {
-    const { abundanceRef } = ctx.data;
-    if (abundanceRef === undefined) return undefined;
-    const cols = ctx.resultPool.getAnchoredPColumns({ main: abundanceRef }, [
-      { axes: [{ anchor: "main", idx: 0 }], name: "pl7.app/label" },
-    ]);
-    return cols?.[0]?.id;
-  })
-
   // --- Heat map outputs (filled by the workflow) ---
 
   // Heat map 1: state-matrix enrichment precalc result `[parentId, position, state] -> value`.
@@ -485,6 +480,26 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   .output("stateHeatmapPCols", (ctx) => {
     try {
       return ctx.outputs?.resolve("stateHeatmapPf")?.getPColumns();
+    } catch {
+      return undefined;
+    }
+  })
+
+  // Single-mutant landscape: per-score singleton values
+  // `[score, parentId, position, state] -> cellValue`. Present only when score columns are
+  // selected AND the profiler emitted a mutation count (the workflow emits it conditionally).
+  .outputWithStatus("singleMutantHeatmapPf", (ctx): PFrameHandle | undefined => {
+    try {
+      const pCols = ctx.outputs?.resolve("singleMutantHeatmapPf")?.getPColumns();
+      if (pCols === undefined) return undefined;
+      return createPFrameForGraphs(ctx, pCols);
+    } catch {
+      return undefined;
+    }
+  })
+  .output("singleMutantHeatmapPCols", (ctx) => {
+    try {
+      return ctx.outputs?.resolve("singleMutantHeatmapPf")?.getPColumns();
     } catch {
       return undefined;
     }
@@ -566,6 +581,9 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     const sections: { type: "link"; href: `/${string}`; label: string }[] = [
       { type: "link", href: "/", label: "Mutation Heatmap" },
     ];
+    if ((ctx.data.scoreRefs ?? []).length > 0) {
+      sections.push({ type: "link", href: "/single-mutant", label: "Single Mutant Landscape" });
+    }
     // Needs a baseline + at least one comparison round (see workflow's hasComposition).
     if (ctx.data.roundFrequencyRefs.length >= 2) {
       sections.push({ type: "link", href: "/composition", label: "Enrichment Analysis" });
