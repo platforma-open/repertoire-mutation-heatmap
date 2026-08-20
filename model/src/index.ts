@@ -1,17 +1,41 @@
 import type { GraphMakerState } from "@milaboratories/graph-maker";
 import type {
+  ColumnRecipe,
   InferOutputsType,
   PColumnSpec,
   PFrameHandle,
   PlRef,
   SUniversalPColumnId,
 } from "@platforma-sdk/model";
+import { kind } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.kind";
 import {
   BlockModelV3,
-  ColumnCollectionBuilder,
+  ColumnsCollection,
   DataModelBuilder,
   createPFrameForGraphs,
+  extractPObjectId,
 } from "@platforma-sdk/model";
+
+/** A selector `name`/`domain` given as a bare string normalizes to a REGEX matcher, so an
+ *  exact name must be spelled out. `"pl7.app/frequency"` as a regex is unanchored and `.`
+ *  matches any character, which would also admit `pl7.app/frequencyRatio`. */
+const exactMatch = (value: string) => [{ type: "exact" as const, value }];
+
+/** Collapse discovery hits to one recipe per storage column, first hit wins.
+ *
+ *  The retired `findColumns()` keyed its result map on the leaf column, merging several
+ *  reachability variants into one entry. `discover().getColumns()` returns one recipe PER
+ *  variant instead, and the value these options carry is the leaf id — so without this,
+ *  variants of one column become several dropdown entries sharing a single value. */
+function dedupByLeafId(recipes: ColumnRecipe[]): ColumnRecipe[] {
+  const seen = new Set<string>();
+  return recipes.filter((recipe) => {
+    const leaf = extractPObjectId(recipe.id);
+    if (seen.has(leaf)) return false;
+    seen.add(leaf);
+    return true;
+  });
+}
 
 // Profiler spec names used as join keys — must stay byte-identical to the names the profiler emits.
 const STATE_MATRIX = "pl7.app/repertoire/stateMatrix";
@@ -121,7 +145,7 @@ function canonicalizeFilter(f: VariantFilter): VariantFilter {
   return out;
 }
 
-const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
+const dataModel = new DataModelBuilder({ kind }).from<BlockData>("v1").init(() => ({
   level: "aminoacid" as const,
   valueMode: "abundance" as const,
   normalize: true,
@@ -195,7 +219,7 @@ const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
   },
 }));
 
-export const platforma = BlockModelV3.create(dataModel)
+export const platforma = BlockModelV3.create({ dataModel, kind })
 
   .args<BlockArgs>((data) => {
     if (data.stateMatrixRef === undefined) {
@@ -229,6 +253,15 @@ export const platforma = BlockModelV3.create(dataModel)
       compositionEpsilon: data.compositionEpsilon ?? 1e-6,
     };
   })
+
+  // The inverse of the data model's `init`. The kind declares no params (see
+  // `kind/src/index.ts`), so there is nothing to project and a project exported as a
+  // template brings this block back default-initialized — the dataset and every setting
+  // are re-picked by hand. Widening this is a deliberate follow-up, not an oversight: the
+  // `PlRef` fields and the scalar knobs are templatable, while the discovered
+  // `SUniversalPColumnId` selections are anchored against one project's upstream columns
+  // and the SDK promises template rewriting for `PlRef` only.
+  .templateParams(() => ({}))
 
   // --- Input selection from the result pool ---
 
@@ -285,7 +318,7 @@ export const platforma = BlockModelV3.create(dataModel)
   })
 
   // Per-variant numeric property columns for the `property` value-mode and the
-  // property-range filter. Discovered via findColumns (not getCanonicalOptions — see
+  // property-range filter. Discovered via discover() (not getCanonicalOptions — see
   // roundFrequencyOptions for why) anchored on BOTH the state matrix (profiler-keyed
   // properties, e.g. mutations) and the abundance (enrichment-keyed properties). The
   // anchor names `main` / `freqAnchor` must match the workflow's `bb.addAnchor(...)`.
@@ -303,29 +336,31 @@ export const platforma = BlockModelV3.create(dataModel)
       : undefined;
     if (abundanceSpec) anchors.freqAnchor = abundanceSpec;
 
-    const sourceColumns = ctx.resultPool.selectColumns(
-      (spec) =>
-        (spec.valueType as string) !== "File" &&
-        !(spec.annotations?.["pl7.app/isLinkerColumn"] === "true" && spec.axesSpec.length > 2),
-    );
-
-    const collection = new ColumnCollectionBuilder(ctx.getService("pframeSpec"))
-      .addSource(sourceColumns)
-      .build({ anchors });
-    if (!collection) return undefined;
+    // The result pool is handed over whole (the `"result_pool"` shorthand) rather than
+    // pre-filtered column by column. Linkers are dropped host-side; File-valued columns
+    // cannot be named in a selector, and the numeric check below already excludes them.
+    const columns = ColumnsCollection(["result_pool"])
+      .discover({
+        anchors,
+        mode: "enrichment",
+        maxHops: 0,
+        exclude: [{ annotations: { "pl7.app/isLinkerColumn": exactMatch("true") } }],
+      })
+      .getColumns();
 
     const numeric = new Set(["Int", "Long", "Float", "Double"]);
     const seen = new Set<string>();
     const options: { label: string; value: SUniversalPColumnId }[] = [];
-    for (const m of collection.findColumns({ mode: "enrichment", maxHops: 0 })) {
-      if (!numeric.has(m.column.spec.valueType as string)) continue;
+    for (const recipe of columns) {
+      const spec = recipe.getSpec();
+      if (!numeric.has(spec.valueType as string)) continue;
       // Dedup a column reachable via both anchors (by identity, not anchored id).
-      const dedupKey = m.column.spec.name + "|" + JSON.stringify(m.column.spec.domain ?? {});
+      const dedupKey = spec.name + "|" + JSON.stringify(spec.domain ?? {});
       if (seen.has(dedupKey)) continue;
       seen.add(dedupKey);
       options.push({
-        label: (m.column.spec.annotations?.["pl7.app/label"] as string | undefined) ?? m.column.id,
-        value: m.column.id as SUniversalPColumnId,
+        label: (spec.annotations?.["pl7.app/label"] as string | undefined) ?? recipe.id,
+        value: recipe.id as SUniversalPColumnId,
       });
     }
     return options;
@@ -336,8 +371,8 @@ export const platforma = BlockModelV3.create(dataModel)
   // `pl7.app/enrichment/condition`. The user orders the chosen rounds in the UI
   // (baseline = first); the workflow reads each round's identity from that domain.
   //
-  // Discovered via ColumnCollectionBuilder.findColumns anchored on the ABUNDANCE ref (the
-  // enrichment block keys these on `abundanceSpec.axesSpec[1]`). `findColumns` resolves via
+  // Discovered via ColumnsCollection.discover anchored on the ABUNDANCE ref (the
+  // enrichment block keys these on `abundanceSpec.axesSpec[1]`). `discover` resolves via
   // the spec frame, unlike `getCanonicalOptions` — whose id bakes in the enrichment column's
   // nested-escaped-JSON domains (conditionsOrder / filteringConfig), which fail to round-trip
   // in the workflow's anchored query. The anchor name `freqAnchor` must match the workflow's
@@ -352,28 +387,24 @@ export const platforma = BlockModelV3.create(dataModel)
     const anchorSpec = ctx.resultPool.getPColumnSpecByRef(abundanceRef);
     if (!anchorSpec) return undefined;
 
-    // Exclude columns the WASM spec frame rejects (File value type; wide linkers).
-    const sourceColumns = ctx.resultPool.selectColumns(
-      (spec) =>
-        (spec.valueType as string) !== "File" &&
-        !(spec.annotations?.["pl7.app/isLinkerColumn"] === "true" && spec.axesSpec.length > 2),
+    const matches = dedupByLeafId(
+      ColumnsCollection(["result_pool"])
+        .discover({
+          include: { name: exactMatch("pl7.app/frequency") },
+          anchors: { freqAnchor: anchorSpec },
+          mode: "enrichment",
+          maxHops: 0,
+        })
+        .getColumns(),
     );
 
-    const collection = new ColumnCollectionBuilder(ctx.getService("pframeSpec"))
-      .addSource(sourceColumns)
-      .build({ anchors: { freqAnchor: anchorSpec } });
-    if (!collection) return undefined;
-
-    const matches = collection.findColumns({
-      include: { name: "pl7.app/frequency" },
-      mode: "enrichment",
-      maxHops: 0,
+    return matches.map((recipe) => {
+      const spec = recipe.getSpec();
+      return {
+        label: (spec.annotations?.["pl7.app/label"] as string | undefined) ?? recipe.id,
+        value: recipe.id as SUniversalPColumnId,
+      };
     });
-
-    return matches.map((m) => ({
-      label: (m.column.spec.annotations?.["pl7.app/label"] as string | undefined) ?? m.column.id,
-      value: m.column.id as SUniversalPColumnId,
-    }));
   })
 
   // Pre-aggregated known×sample abundance `[sampleId, knownVariantKey]` (heat map 2).
