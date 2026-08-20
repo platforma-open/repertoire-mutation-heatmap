@@ -1,8 +1,8 @@
 ---
-"@platforma-open/milaboratories.repertoire-mutation-heatmap.block": minor
-"@platforma-open/milaboratories.repertoire-mutation-heatmap.model": minor
-"@platforma-open/milaboratories.repertoire-mutation-heatmap.ui": minor
-"@platforma-open/milaboratories.repertoire-mutation-heatmap.workflow": minor
+"@platforma-open/milaboratories.repertoire-mutation-heatmap.block": patch
+"@platforma-open/milaboratories.repertoire-mutation-heatmap.model": patch
+"@platforma-open/milaboratories.repertoire-mutation-heatmap.ui": patch
+"@platforma-open/milaboratories.repertoire-mutation-heatmap.workflow": patch
 ---
 
 Add the Single Mutant Landscape view and remove the subset filter
