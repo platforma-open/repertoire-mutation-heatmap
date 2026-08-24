@@ -42,6 +42,14 @@ wf.prepare(func(args) {
 		name: "pl7.app/repertoire/regionAnnotation",
 		axes: [{ anchor: "main", idx: 1 }, { anchor: "main", idx: 2 }]
 	}, "regionAnnotation")
+	// Parent residue per position [parentId, position] -> residue, from the profiler — the
+	// reference the single-mutant predicate differences against. Matched on the same
+	// state-matrix axes as the region track. addMulti so a run made before the profiler
+	// exported it resolves to empty and the body's fallback takes over.
+	bb.addMulti({
+		name: "pl7.app/repertoire/parentResidue",
+		axes: [{ anchor: "main", idx: 1 }, { anchor: "main", idx: 2 }]
+	}, "parentResidue")
 	// Per-variant mutation count from the profiler, keyed on the state matrix's variantKey axis
 	// (idx 0). Drives the mutation landscape's `mutationCount == 1` predicate. addMulti so a
 	// run that did not emit it resolves to empty and the landscape is simply skipped, rather than
@@ -153,20 +161,41 @@ wf.body(func(args) {
 	}
 
 	// --- Parent-residue track ---
-	// The state matrix's default cell is the parent residue — substitutions/deletions overwrite
-	// it — so per position the parent residue is the state carried by the most variants (by
-	// distinct-variant count). Emit [position] -> parentResidue for a GraphMaker annotation track
-	// that shows the parent sequence under the position axis. Single-parent (one residue per
-	// position); ties broken alphabetically for a deterministic result. Reliable for typical DMS,
-	// where any single position is unmutated in the large majority of variants.
-	parentResDf := smDf.
-		groupBy("position", "state").
-		agg(pt.col("variantKey").count().alias("n")).
-		withColumns(pt.col("n").max().over(["position"]).alias("maxN")).
-		filter(pt.col("n").eq(pt.col("maxN"))).
-		sort(["position", "state"]).
-		groupBy("position").
-		agg(pt.col("state").cast("String").first().alias("parentResidue"))
+	// Emit [position] -> parentResidue for a GraphMaker annotation track under the X axis.
+	// Annotation columns must be keyed solely by that axis, so the profiler's
+	// [parentId, position] column is scoped to the selected parent and then collapsed — the same
+	// two steps as the region track above.
+	//
+	// FALLBACK, remove once projects have re-run the profiler: a run predating the exported
+	// column resolves to an empty query. Guess the parent residue as the state carried by the
+	// most distinct variants (the matrix's default cell IS the parent residue), ties broken
+	// alphabetically. Wrong wherever most variants are mutated at a position — and then every
+	// single mutant differs from it there and gains an extra cell, which is why the column exists.
+	parentResidueEntries := columns.getColumns("parentResidue")
+	parentResDf := undefined
+	if !is_undefined(parentResidueEntries) && len(parentResidueEntries) > 0 {
+		prDf := ptWf.frame(pt.p.column("parentResidue", parentResidueEntries[0])).select(
+			pt.axis(PARENT_ID_AXIS).alias("parentId"),
+			pt.axis(POSITION_AXIS).alias("position"),
+			pt.col("parentResidue")
+		)
+		if !is_undefined(args.selectedParentId) {
+			prDf = prDf.filter(pt.col("parentId").eq(pt.lit(args.selectedParentId)))
+		}
+		parentResDf = prDf.
+			groupBy("position").
+			agg(pt.col("parentResidue").cast("String").first().alias("parentResidue"))
+	} else {
+		// smDf is already scoped to the selected parent, so this collapse is parent-local.
+		parentResDf = smDf.
+			groupBy("position", "state").
+			agg(pt.col("variantKey").count().alias("n")).
+			withColumns(pt.col("n").max().over(["position"]).alias("maxN")).
+			filter(pt.col("n").eq(pt.col("maxN"))).
+			sort(["position", "state"]).
+			groupBy("position").
+			agg(pt.col("state").cast("String").first().alias("parentResidue"))
+	}
 	parentResDf.save("parentResidue.tsv")
 
 	// --- Mutation landscape precalc (optional) ---

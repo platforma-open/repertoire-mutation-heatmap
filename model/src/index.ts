@@ -98,7 +98,7 @@ const dataModel = new DataModelBuilder({ kind }).from<BlockData>("v1").init(() =
   compositionEpsilon: 1e-6,
   scoreRefs: [],
   singleMutantHeatmapState: {
-    title: "Mutation Landscape",
+    title: "Single Mutation Landscape",
     template: "heatmap",
     // This is the landing page, so it opens with the Settings drawer out: a fresh block has no
     // dataset and nothing to plot, and Settings is the first thing the user needs. The page
@@ -389,7 +389,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     // it is what a block with nothing selected yet shows — and the only way to reach Settings
     // and pick a dataset. Its own empty state asks for the score columns.
     const sections: { type: "link"; href: `/${string}`; label: string }[] = [
-      { type: "link", href: "/", label: "Mutation Landscape" },
+      { type: "link", href: "/", label: "Single Mutation Landscape" },
     ];
     // Needs a baseline + at least one comparison round (see workflow's hasComposition).
     if (ctx.data.roundFrequencyRefs.length >= 2) {
