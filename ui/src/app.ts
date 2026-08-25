@@ -1,15 +1,13 @@
 import { platforma } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import { defineAppV3 } from "@platforma-sdk/ui-vue";
-import MainPage from "./MainPage.vue";
-import KnownHeatmapPage from "./KnownHeatmapPage.vue";
 import CompositionHeatmapPage from "./CompositionHeatmapPage.vue";
+import MutationLandscapePage from "./MutationLandscapePage.vue";
 
 export const sdkPlugin = defineAppV3(platforma, (app) => ({
   progress: () => app.model.outputs.isRunning,
   routes: {
-    "/": () => MainPage,
+    "/": () => MutationLandscapePage,
     "/composition": () => CompositionHeatmapPage,
-    "/known-heatmap": () => KnownHeatmapPage,
   },
 }));
 

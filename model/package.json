@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@milaboratories/graph-maker": "catalog:",
+    "@platforma-open/milaboratories.repertoire-mutation-heatmap.kind": "workspace:*",
     "@platforma-sdk/model": "catalog:"
   },
   "devDependencies": {

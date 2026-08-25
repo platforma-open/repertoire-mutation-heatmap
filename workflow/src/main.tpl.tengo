@@ -1,21 +1,21 @@
-// Deep Mutational Scanning — workflow.
+// Mutation Explorer — workflow.
 //
-// Heat map 1 precalc. The profiler emits the per-variant state matrix
-// [variantKey, parentId, position] -> state and per-sample abundance
-// [sampleId, variantKey] -> count. This block collapses the variant axis: for each
-// (parentId, position, state) cell it aggregates over the variants carrying state
-// `s` at position `p`.
+// The profiler emits the per-variant state matrix [variantKey, parentId, position] -> state.
+// This block reads it, scopes everything to one parent, and precalculates two position ×
+// residue maps. Neither is a population marginal: no view here aggregates over the variants
+// carrying a residue. The aggregated state heat map that did was removed.
 //
-// Two value modes:
-//   abundance — cell = SUM of per-variant abundance.
-//   property  — cell = MEAN of a per-variant property (e.g. a Tite-Seq Kd).
+// Mutation landscape. Per-variant score columns plotted over the single-mutant subset only, so
+// a cell is one variant's own value rather than a summary over every genetic background the
+// substitution co-occurs with. Output: [score, parentId, position, state] -> cellValue, with
+// `score` as the facet axis. Present only when score columns are selected.
 //
-// Live filter + baseline-vs-filtered: the variant subset is filtered BEFORE
-// aggregation (by sample/round and/or per-variant property range); the precalc
-// emits an "All variants" baseline and a "Filtered" facet, keyed by `subset`.
-// Changing the filter (a block arg) re-runs this workflow. Output:
-// [subset, parentId, position, state] -> heatmapValue, for GraphMaker
-// (X=position, Y=state, tab=parent, facet=subset).
+// Enrichment analysis. Per-position, per-residue log2 fold change of residue composition in
+// each selection round against the baseline round. Output:
+// [round, parentId, position, state] -> log2fc. Needs at least two rounds.
+//
+// Both maps ride alongside two position-keyed annotation tracks — region membership and the
+// parent residue — which GraphMaker renders under the X axis.
 
 wf := import("@platforma-sdk/workflow-tengo:workflow")
 xsv := import("@platforma-sdk/workflow-tengo:pframes.xsv")
@@ -28,7 +28,6 @@ maps := import("@platforma-sdk/workflow-tengo:maps")
 VARIANT_KEY_AXIS := "pl7.app/variantKey"
 PARENT_ID_AXIS := "pl7.app/repertoire/parentId"
 POSITION_AXIS := "pl7.app/repertoire/position"
-SAMPLE_ID_AXIS := "pl7.app/sampleId"
 
 wf.prepare(func(args) {
 	bb := wf.createPBundleBuilder()
@@ -43,25 +42,35 @@ wf.prepare(func(args) {
 		name: "pl7.app/repertoire/regionAnnotation",
 		axes: [{ anchor: "main", idx: 1 }, { anchor: "main", idx: 2 }]
 	}, "regionAnnotation")
-	if !is_undefined(args.abundanceRef) {
-		// Abundance anchor for enrichment/abundance-keyed columns (round frequencies and
-		// enrichment-derived properties), discovered via findColumns on the abundance axis.
-		// The name must match the model's discovery anchors.
-		bb.addAnchor("freqAnchor", args.abundanceRef)
-		bb.addSingle(args.abundanceRef, "abundance")
-	}
-	// Per-variant property used as the cell value (property mode).
-	if args.valueMode == "property" && !is_undefined(args.propertyRef) {
-		bb.addSingle(args.propertyRef, "valueProperty")
-	}
-	// Per-variant property used to filter the subset (property-range filter).
-	if !is_undefined(args.filter) && !is_undefined(args.filter.propertyRef) {
-		bb.addSingle(args.filter.propertyRef, "filterProperty")
+	// Parent residue per position [parentId, position] -> residue, from the profiler — the
+	// reference the single-mutant predicate differences against. Matched on the same
+	// state-matrix axes as the region track. addMulti so a run made before the profiler
+	// exported it resolves to empty and the body's fallback takes over.
+	bb.addMulti({
+		name: "pl7.app/repertoire/parentResidue",
+		axes: [{ anchor: "main", idx: 1 }, { anchor: "main", idx: 2 }]
+	}, "parentResidue")
+	// Per-variant mutation count from the profiler, keyed on the state matrix's variantKey axis
+	// (idx 0). Drives the mutation landscape's `mutationCount == 1` predicate. addMulti so a
+	// run that did not emit it resolves to empty and the landscape is simply skipped, rather than
+	// failing the whole workflow.
+	bb.addMulti({
+		name: "pl7.app/repertoire/mutationCount",
+		axes: [{ anchor: "main", idx: 0 }]
+	}, "mutationCount")
+	// Per-variant score columns for the mutation landscape. Same shape as the round
+	// frequencies: ids come from the model's discover() (anchored on `main`), added without a
+	// query key and retrieved by the ref itself in the body.
+	if !is_undefined(args.scoreRefs) {
+		for ref in args.scoreRefs {
+			bb.addSingle(ref)
+		}
 	}
 	// Per-round frequency columns from the enrichment block (composition-enrichment view).
-	// Anchored on the abundance ref (freqAnchor, added above); ids come from findColumns and
-	// are added without a query key, retrieved by the ref itself in the body.
-	if !is_undefined(args.abundanceRef) && !is_undefined(args.roundFrequencyRefs) && len(args.roundFrequencyRefs) >= 2 {
+	// Anchored on `main` like the scores: these are keyed on variantKey alone, which the state
+	// matrix carries. Ids come from the model's discover() and are added without a query key,
+	// retrieved by the ref itself in the body.
+	if !is_undefined(args.roundFrequencyRefs) && len(args.roundFrequencyRefs) >= 2 {
 		for ref in args.roundFrequencyRefs {
 			bb.addSingle(ref)
 		}
@@ -72,18 +81,10 @@ wf.prepare(func(args) {
 })
 
 wf.body(func(args) {
-	valueMode := args.valueMode
-	// Each mode needs its value source; bail out (no heat map) until it is selected. The parent
-	// list is not produced here — the UI enumerates parents from the result pool before this runs.
-	if valueMode == "abundance" && is_undefined(args.abundanceRef) {
-		return { outputs: {}, exports: {} }
-	}
-	if valueMode == "property" && is_undefined(args.propertyRef) {
-		return { outputs: {}, exports: {} }
-	}
-
-	normalized := valueMode == "abundance" && args.normalize
-
+	// No early bail-out on a missing value source: every view here is optional and guarded on
+	// its own inputs, so a run with only a dataset and a parent legitimately produces just the
+	// position-keyed annotation tracks. The parent list is not produced here either — the UI
+	// enumerates parents from the result pool before this runs.
 	columns := args.columns
 	stateSpec := columns.getSpec(args.stateMatrixRef)
 	stateCol := columns.getColumn(args.stateMatrixRef)
@@ -100,39 +101,32 @@ wf.body(func(args) {
 	// Y-axis (state) label, alphabet-aware: residues for the aa matrix, bases for nt.
 	stateAxisLabel := (alphabet == "aminoacid") ? "Amino Acids" : "Nucleotides"
 
-	// --- Resolve the active filter (drives the "Filtered" facet) ---
-	filter := args.filter
-	sampleSel := []
-	if !is_undefined(filter) && !is_undefined(filter.sampleSelection) {
-		sampleSel = filter.sampleSelection
-	}
-	hasSampleFilter := len(sampleSel) > 0
-
-	propMin := undefined
-	propMax := undefined
-	hasPropFilter := false
-	if !is_undefined(filter) && !is_undefined(filter.propertyRef) && !is_undefined(filter.range) {
-		propMin = filter.range[0]
-		propMax = filter.range[1]
-		hasPropFilter = !is_undefined(propMin) || !is_undefined(propMax)
-	}
-	filterActive := hasSampleFilter || hasPropFilter
-
 	// --- Shared frames ---
-	smTable := pframes.tsvFileBuilder()
-	smTable.mem("16GiB") // @TODO scale with input size
-	smTable.cpu(4)
-	smTable.setAxisHeader(VARIANT_KEY_AXIS, "variantKey")
-	smTable.setAxisHeader(PARENT_ID_AXIS, "parentId")
-	smTable.setAxisHeader(POSITION_AXIS, "position")
-	smTable.add(stateCol, { header: "state" })
-	smTsv := smTable.build()
+	// Every PColumn is read straight through pframes-rs: pt.p.column emits a
+	// `read_frame` step, which is a lazy parquet scan (and the one read path ptabler
+	// gives a spill directory). The previous route went through
+	// pframes.tsvFileBuilder, whose build() calls xsv.exportFrame to write the WHOLE
+	// column out as a TSV before this workflow reads it back. Both halves stream, so
+	// it was never a memory problem — but the state matrix is
+	// `distinctVariants x parentLength` rows, so on a DMS-scale run that round trip
+	// costs tens of GB of scratch and two extra full passes for no gain.
+	//
+	// No .mem()/.cpu(): pt sizes both from input volume when neither is set
+	// (ram = between(2 GiB + 4 x size, 2 GiB, 64 GiB), see workflow-tengo
+	// pt/workflow-run.tpl.tengo). An explicit request suppresses that formula, and
+	// the old fixed 16 GiB neither grew for a large run nor gave memory back on a
+	// small one.
+	ptWf := pt.workflow()
 
-	ptWf := pt.workflow().
-		mem("16GiB").
-		cpu(4)
-
-	smDf := ptWf.frame(smTsv, { xsvType: "tsv" })
+	// Axes come back named by their spec, not by a header a builder assigns, so each
+	// is aliased here to the name the rest of this body already uses. Matching on the
+	// axis NAME keeps the resolution identical to the setAxisHeader calls it replaces.
+	smDf := ptWf.frame(pt.p.column("state", stateCol)).select(
+		pt.axis(VARIANT_KEY_AXIS).alias("variantKey"),
+		pt.axis(PARENT_ID_AXIS).alias("parentId"),
+		pt.axis(POSITION_AXIS).alias("position"),
+		pt.col("state")
+	)
 
 	// Scope the whole plot to one parent. Everything downstream derives from smDf (heat map
 	// cells, the parent-residue track, composition), so a single filter here makes them all
@@ -141,126 +135,6 @@ wf.body(func(args) {
 	if !is_undefined(args.selectedParentId) {
 		smDf = smDf.filter(pt.col("parentId").eq(pt.lit(args.selectedParentId)))
 	}
-
-	abDf := undefined
-	if !is_undefined(args.abundanceRef) {
-		abTable := pframes.tsvFileBuilder()
-		abTable.mem("16GiB")
-		abTable.cpu(4)
-		abTable.setAxisHeader(SAMPLE_ID_AXIS, "sampleId")
-		abTable.setAxisHeader(VARIANT_KEY_AXIS, "variantKey")
-		abTable.add(columns.getColumn("abundance"), { header: "abundance" })
-		abDf = ptWf.frame(abTable.build(), { xsvType: "tsv" })
-	}
-
-	// Value-mode property frame [variantKey -> variantValue] (property mode).
-	valuePropDf := undefined
-	if valueMode == "property" {
-		vpTable := pframes.tsvFileBuilder()
-		vpTable.mem("8GiB")
-		vpTable.cpu(2)
-		vpTable.setAxisHeader(VARIANT_KEY_AXIS, "variantKey")
-		vpTable.add(columns.getColumn("valueProperty"), { header: "vProp" })
-		valuePropDf = ptWf.frame(vpTable.build(), { xsvType: "tsv" }).
-			select(pt.col("variantKey"), pt.col("vProp").alias("variantValue"))
-	}
-
-	// Sample-selection predicate (OR-chain — pt has no list-membership operator).
-	sampleExpr := undefined
-	if hasSampleFilter {
-		sampleExpr = pt.col("sampleId").eq(pt.lit(sampleSel[0]))
-		for i := 1; i < len(sampleSel); i++ {
-			sampleExpr = sampleExpr.or(pt.col("sampleId").eq(pt.lit(sampleSel[i])))
-		}
-	}
-
-	// Variants passing the property-range filter (shared by both value modes).
-	keptByProperty := undefined
-	if hasPropFilter {
-		fpTable := pframes.tsvFileBuilder()
-		fpTable.mem("8GiB")
-		fpTable.cpu(2)
-		fpTable.setAxisHeader(VARIANT_KEY_AXIS, "variantKey")
-		fpTable.add(columns.getColumn("filterProperty"), { header: "fProp" })
-		k := ptWf.frame(fpTable.build(), { xsvType: "tsv" })
-		if !is_undefined(propMin) {
-			k = k.filter(pt.col("fProp").ge(pt.lit(propMin)))
-		}
-		if !is_undefined(propMax) {
-			k = k.filter(pt.col("fProp").le(pt.lit(propMax)))
-		}
-		keptByProperty = k.select(pt.col("variantKey"))
-	}
-
-	// Per-variant value frame [variantKey -> variantValue]. `applyFilter` toggles
-	// the subset filter (false = baseline, true = filtered facet).
-	buildVariantValue := func(applyFilter) {
-		if valueMode == "abundance" {
-			df := abDf
-			// Sample filter changes the abundance value (sum over selected samples)
-			// and the variant set at once.
-			if applyFilter && !is_undefined(sampleExpr) {
-				df = df.filter(sampleExpr)
-			}
-			vv := df.groupBy("variantKey").agg(pt.col("abundance").sum().alias("variantValue"))
-			if applyFilter && !is_undefined(keptByProperty) {
-				vv = vv.join(keptByProperty, { leftOn: ["variantKey"], rightOn: ["variantKey"], how: "inner" })
-			}
-			return vv
-		}
-		// Property mode: value is the per-variant property (sample-independent).
-		// The filter only restricts which variants are included.
-		vv := valuePropDf
-		if applyFilter {
-			if !is_undefined(keptByProperty) {
-				vv = vv.join(keptByProperty, { leftOn: ["variantKey"], rightOn: ["variantKey"], how: "inner" })
-			}
-			// Sample filter restricts to variants observed in the selected samples
-			// (only possible when an abundance column is present).
-			if !is_undefined(sampleExpr) && !is_undefined(abDf) {
-				observed := abDf.filter(sampleExpr).
-					groupBy("variantKey").
-					agg(pt.col("abundance").count().alias("_n")).
-					select(pt.col("variantKey"))
-				vv = vv.join(observed, { leftOn: ["variantKey"], rightOn: ["variantKey"], how: "inner" })
-			}
-		}
-		return vv
-	}
-
-	// Collapse a per-variant value frame to [parentId, position, state] and tag the
-	// subset facet. Inner join drops variants with no value.
-	aggregateCells := func(variantValueDf, subsetLabel) {
-		grouped := smDf.join(variantValueDf, { leftOn: ["variantKey"], rightOn: ["variantKey"], how: "inner" }).
-			groupBy("parentId", "position", "state")
-		agg := undefined
-		if valueMode == "abundance" {
-			agg = grouped.agg(pt.col("variantValue").sum().alias("cellValue"))
-		} else {
-			agg = grouped.agg(pt.col("variantValue").mean().alias("cellValue"))
-		}
-		return agg.withColumns(pt.lit(subsetLabel).alias("subset"))
-	}
-
-	aggAll := aggregateCells(buildVariantValue(false), "All variants")
-	resultDf := aggAll
-	if filterActive {
-		aggFilt := aggregateCells(buildVariantValue(true), "Filtered")
-		resultDf = pt.concat([aggAll, aggFilt])
-	}
-
-	// Normalize each cell by its (subset, parentId, position) column total → state
-	// frequency. Each position column then sums to 1 within a facet — the canonical
-	// enrichment readout.
-	if normalized {
-		resultDf = resultDf.withColumns(
-			pt.col("cellValue").
-				truediv(pt.col("cellValue").sum().over(["subset", "parentId", "position"])).
-				alias("cellValue")
-		)
-	}
-
-	resultDf.save("stateHeatmap.tsv")
 
 	// --- Region track (optional) ---
 	// Collapse the profiler's per-position region membership [parentId, position] -> region to
@@ -272,13 +146,11 @@ wf.body(func(args) {
 	regionEntries := columns.getColumns("regionAnnotation")
 	hasRegion := !is_undefined(regionEntries) && len(regionEntries) > 0
 	if hasRegion {
-		rt := pframes.tsvFileBuilder()
-		rt.mem("2GiB")
-		rt.cpu(1)
-		rt.setAxisHeader(PARENT_ID_AXIS, "parentId")
-		rt.setAxisHeader(POSITION_AXIS, "position")
-		rt.add(regionEntries[0], { header: "region" })
-		regionDf := ptWf.frame(rt.build(), { xsvType: "tsv" })
+		regionDf := ptWf.frame(pt.p.column("region", regionEntries[0])).select(
+			pt.axis(PARENT_ID_AXIS).alias("parentId"),
+			pt.axis(POSITION_AXIS).alias("position"),
+			pt.col("region")
+		)
 		if !is_undefined(args.selectedParentId) {
 			regionDf = regionDf.filter(pt.col("parentId").eq(pt.lit(args.selectedParentId)))
 		}
@@ -289,21 +161,128 @@ wf.body(func(args) {
 	}
 
 	// --- Parent-residue track ---
-	// The state matrix's default cell is the parent residue — substitutions/deletions overwrite
-	// it — so per position the parent residue is the state carried by the most variants (by
-	// distinct-variant count). Emit [position] -> parentResidue for a GraphMaker annotation track
-	// that shows the parent sequence under the position axis. Single-parent (one residue per
-	// position); ties broken alphabetically for a deterministic result. Reliable for typical DMS,
-	// where any single position is unmutated in the large majority of variants.
-	smDf.
-		groupBy("position", "state").
-		agg(pt.col("variantKey").count().alias("n")).
-		withColumns(pt.col("n").max().over(["position"]).alias("maxN")).
-		filter(pt.col("n").eq(pt.col("maxN"))).
-		sort(["position", "state"]).
-		groupBy("position").
-		agg(pt.col("state").cast("String").first().alias("parentResidue")).
-		save("parentResidue.tsv")
+	// Emit [position] -> parentResidue for a GraphMaker annotation track under the X axis.
+	// Annotation columns must be keyed solely by that axis, so the profiler's
+	// [parentId, position] column is scoped to the selected parent and then collapsed — the same
+	// two steps as the region track above.
+	//
+	// FALLBACK, remove once projects have re-run the profiler: a run predating the exported
+	// column resolves to an empty query. Guess the parent residue as the state carried by the
+	// most distinct variants (the matrix's default cell IS the parent residue), ties broken
+	// alphabetically. Wrong wherever most variants are mutated at a position — and then every
+	// single mutant differs from it there and gains an extra cell, which is why the column exists.
+	parentResidueEntries := columns.getColumns("parentResidue")
+	parentResDf := undefined
+	if !is_undefined(parentResidueEntries) && len(parentResidueEntries) > 0 {
+		prDf := ptWf.frame(pt.p.column("parentResidue", parentResidueEntries[0])).select(
+			pt.axis(PARENT_ID_AXIS).alias("parentId"),
+			pt.axis(POSITION_AXIS).alias("position"),
+			pt.col("parentResidue")
+		)
+		if !is_undefined(args.selectedParentId) {
+			prDf = prDf.filter(pt.col("parentId").eq(pt.lit(args.selectedParentId)))
+		}
+		parentResDf = prDf.
+			groupBy("position").
+			agg(pt.col("parentResidue").cast("String").first().alias("parentResidue"))
+	} else {
+		// smDf is already scoped to the selected parent, so this collapse is parent-local.
+		parentResDf = smDf.
+			groupBy("position", "state").
+			agg(pt.col("variantKey").count().alias("n")).
+			withColumns(pt.col("n").max().over(["position"]).alias("maxN")).
+			filter(pt.col("n").eq(pt.col("maxN"))).
+			sort(["position", "state"]).
+			groupBy("position").
+			agg(pt.col("state").cast("String").first().alias("parentResidue"))
+	}
+	parentResDf.save("parentResidue.tsv")
+
+	// --- Mutation landscape precalc (optional) ---
+	// The singleton cell mode: a cell holds the value of the ONE single-mutant variant carrying
+	// exactly that substitution, taken directly with no aggregation. The alternative would be a
+	// population marginal, pooling every variant carrying the residue — which mixes in the
+	// genetic backgrounds the substitution co-occurs with, and is why this block no longer
+	// draws one.
+	//
+	// Two things pin a single mutant to its one real cell. First `mutationCount == 1` selects the
+	// variants. Then the substitution has to be located: the state matrix carries the PARENT
+	// residue in every position the variant did not mutate, so a naive join would paint each
+	// single mutant across the whole parent row. Diffing against the per-position parent residue
+	// (derived above from the full population) keeps only the position where the variant actually
+	// differs — exactly one row per variant.
+	//
+	// Cells with no covering single-mutant variant are ABSENT, never filled from a fallback.
+	scoreRefs := args.scoreRefs
+	mutCountEntries := columns.getColumns("mutationCount")
+	hasLandscape := !is_undefined(scoreRefs) && len(scoreRefs) > 0 &&
+		!is_undefined(mutCountEntries) && len(mutCountEntries) > 0
+	if hasLandscape {
+		singleMutants := ptWf.frame(pt.p.column("mutCount", mutCountEntries[0])).
+			select(pt.axis(VARIANT_KEY_AXIS).alias("variantKey"), pt.col("mutCount")).
+			filter(pt.col("mutCount").eq(pt.lit(1))).
+			select(pt.col("variantKey"))
+
+		// [variantKey, parentId, position, state] — one row per single-mutant variant, at the
+		// position/residue of its own substitution.
+		mutCells := smDf.
+			join(singleMutants, { on: "variantKey", how: "inner" }).
+			join(parentResDf, { on: "position", how: "inner" }).
+			filter(pt.col("state").neq(pt.col("parentResidue"))).
+			select(pt.col("variantKey"), pt.col("parentId"), pt.col("position"), pt.col("state"))
+
+		// One long frame per selected score, tagged with a block-local `score` key, then stacked.
+		// GraphMaker orders facets by the axis label (numeric-collation sort) with no facet-order
+		// override, so the label leads with the arrangement index to render in the user's order —
+		// the same device the composition view uses for rounds.
+		scoreFrames := []
+		for i, ref in scoreRefs {
+			sSpec := columns.getSpec(ref)
+			scoreLabel := "Score " + string(i + 1)
+			if !is_undefined(sSpec) && !is_undefined(sSpec.annotations) && !is_undefined(sSpec.annotations["pl7.app/label"]) {
+				scoreLabel = sSpec.annotations["pl7.app/label"]
+			}
+			scoreKey := string(i + 1) + ". " + scoreLabel
+
+			// Header carries the loop index: every iteration adds its own frame to the
+			// same pt workflow, so a shared header would collide across scores.
+			sHeader := "scoreValue_" + string(i)
+			sDf := ptWf.frame(pt.p.column(sHeader, columns.getColumn(ref))).select(
+				pt.axis(VARIANT_KEY_AXIS).alias("variantKey"),
+				pt.col(sHeader).alias("scoreValue")
+			)
+
+			scoreFrames = scoreFrames + [
+				mutCells.
+					join(sDf, { on: "variantKey", how: "inner" }).
+					withColumns(pt.lit(scoreKey).alias("score")).
+					select(
+						pt.col("score"),
+						pt.col("parentId"),
+						pt.col("position"),
+						pt.col("state"),
+						pt.col("variantKey"),
+						// Cast so the stack below survives a mix of integer- and float-valued
+						// scores; the imported value column is Double regardless.
+						pt.col("scoreValue").cast("Double").alias("scoreValue")
+					)
+			]
+		}
+		landscapeDf := scoreFrames[0]
+		if len(scoreFrames) > 1 {
+			landscapeDf = pt.concat(scoreFrames)
+		}
+
+		// Guarantee one row per cell. In a true single-mutant library exactly one variant covers
+		// a cell, so `first` IS that variant's value — no aggregation happens. The sort makes the
+		// outcome deterministic in the degenerate case where a library encodes the same
+		// substitution under two variant keys, instead of failing the import on duplicate keys.
+		landscapeDf.
+			sort(["score", "parentId", "position", "state", "variantKey"]).
+			groupBy("score", "parentId", "position", "state").
+			agg(pt.col("scoreValue").first().alias("cellValue")).
+			save("singleMutantLandscape.tsv")
+	}
 
 	// --- Composition-enrichment precalc (optional) ---
 	// Positional composition shift across rounds: log2(round fraction / baseline fraction),
@@ -340,12 +319,13 @@ wf.body(func(args) {
 			if is_undefined(baselineRound) {
 				baselineRound = roundKey
 			}
-			rTable := pframes.tsvFileBuilder()
-			rTable.mem("8GiB")
-			rTable.cpu(2)
-			rTable.setAxisHeader(VARIANT_KEY_AXIS, "variantKey")
-			rTable.add(columns.getColumn(ref), { header: "freq" })
-			rDf := ptWf.frame(rTable.build(), { xsvType: "tsv" }).
+			// Header carries the loop index — one frame per round in the same workflow.
+			rHeader := "freq_" + string(i)
+			rDf := ptWf.frame(pt.p.column(rHeader, columns.getColumn(ref))).
+				select(
+					pt.axis(VARIANT_KEY_AXIS).alias("variantKey"),
+					pt.col(rHeader).alias("freq")
+				).
 				withColumns(pt.lit(roundKey).alias("round"))
 			roundFrames = roundFrames + [rDf]
 		}
@@ -397,99 +377,15 @@ wf.body(func(args) {
 
 	ptResult := ptWf.run()
 
-	// --- Value column spec, mode-dependent (name stays mode-neutral so the UI
-	// finds it either way) ---
-	valueAnnotations := undefined
-	if valueMode == "property" {
-		propLabel := "property"
-		vSpec := columns.getSpec("valueProperty")
-		if !is_undefined(vSpec) && !is_undefined(vSpec.annotations) && !is_undefined(vSpec.annotations["pl7.app/label"]) {
-			propLabel = vSpec.annotations["pl7.app/label"]
-		}
-		valueAnnotations = {
-			"pl7.app/label": "Mean " + propLabel
-		}
-	} else if normalized {
-		valueAnnotations = {
-			"pl7.app/isAbundance": "true",
-			"pl7.app/abundance/aggregated": "true",
-			"pl7.app/abundance/normalized": "true",
-			"pl7.app/label": "State frequency",
-			"pl7.app/format": ".2p"
-		}
-	} else {
-		valueAnnotations = {
-			"pl7.app/isAbundance": "true",
-			"pl7.app/abundance/aggregated": "true",
-			"pl7.app/label": "Aggregated abundance"
-		}
-	}
-
-	// --- Import back: [subset, parentId, position, state] -> heatmapValue ---
-	// parentId / position inherited verbatim from the profiler; subset and state
-	// are block-local axes (terminal output — rendered by GraphMaker, not joined).
-	heatmapCols := xsv.importFile(
-		ptResult.getFile("stateHeatmap.tsv"),
-		"tsv",
-		{
-			axes: [
-				{
-					column: "subset",
-					spec: {
-						name: "pl7.app/repertoire/heatmapSubset",
-						type: "String",
-						annotations: {
-							"pl7.app/label": "Subset"
-						}
-					}
-				},
-				{ column: "parentId", spec: parentAxisSpec },
-				{ column: "position", spec: positionAxisSpec },
-				{
-					column: "state",
-					spec: {
-						name: "pl7.app/repertoire/state",
-						type: "String",
-						domain: {
-							"pl7.app/alphabet": alphabet
-						},
-						annotations: {
-							"pl7.app/label": stateAxisLabel,
-							"pl7.app/table/fontFamily": "monospace"
-						}
-					}
-				}
-			],
-			columns: [{
-				column: "cellValue",
-				spec: {
-					name: "pl7.app/repertoire/heatmapValue",
-					valueType: "Double",
-					domain: {
-						"pl7.app/alphabet": alphabet
-					},
-					annotations: valueAnnotations
-				}
-			}],
-			storageFormat: "Parquet",
-			partitionKeyLength: 0
-		},
-		{ splitDataAndSpec: true }
-	)
-
 	trace := pSpec.makeTrace(stateSpec, {
 		type: "milaboratories.repertoire-mutation-heatmap",
 		importance: 50,
-		label: "Deep Mutational Scanning"
+		label: "Mutation Explorer"
 	})
 
-	pf := pframes.pFrameBuilder()
-	for k, v in heatmapCols {
-		pf.add(k, trace.inject(v.spec), v.data)
-	}
 	// Region annotation track: [position] -> region, keyed on the same position axis as the
-	// heat map value column so GraphMaker aligns it under the X axis. String value → discrete
-	// annotation. Added to both the state and composition frames; the UI presets it as an
+	// value columns, so GraphMaker aligns it under the X axis. String value → discrete
+	// annotation. Added to both the landscape and composition frames; the UI presets it as an
 	// annotationsX track on each page.
 	regionCols := undefined
 	if hasRegion {
@@ -513,14 +409,11 @@ wf.body(func(args) {
 			},
 			{ splitDataAndSpec: true }
 		)
-		for k, v in regionCols {
-			pf.add("region/" + k, trace.inject(v.spec), v.data)
-		}
 	}
 	// Parent-residue track: [position] -> parentResidue, keyed on the same position axis as the
-	// heat map value column. String value → discrete annotation coloured by residue; the residue
-	// shows in the tooltip. Rides along in stateHeatmapPf; the UI presets it as an annotationsX
-	// track alongside the region track.
+	// value columns. String value → discrete annotation coloured by residue; the residue shows
+	// in the tooltip. Added to the same frames as the region track, which the UI presets as
+	// annotationsX alongside it.
 	parentCols := xsv.importFile(
 		ptResult.getFile("parentResidue.tsv"),
 		"tsv",
@@ -545,13 +438,81 @@ wf.body(func(args) {
 		},
 		{ splitDataAndSpec: true }
 	)
-	for k, v in parentCols {
-		pf.add("parent/" + k, trace.inject(v.spec), v.data)
-	}
-	stateHeatmapPf := pf.build()
+	outputs := {}
 
-	outputs := {
-		stateHeatmapPf: pframes.exportFrame(stateHeatmapPf)
+	// --- Single-mutant landscape import + export (optional) ---
+	// [score, parentId, position, state] -> cellValue. parentId / position inherited from the
+	// profiler; score and state are block-local. One value column across every selected score,
+	// with `score` as the facet axis — so the maps render side by side, sharing one colour scale.
+	// No in-block normalization: these are per-variant scores that arrive already normalized
+	// upstream, and dividing one by a position-column total would answer nothing.
+	if hasLandscape {
+		lsCols := xsv.importFile(
+			ptResult.getFile("singleMutantLandscape.tsv"),
+			"tsv",
+			{
+				axes: [
+					{
+						column: "score",
+						spec: {
+							name: "pl7.app/repertoire/landscapeScore",
+							type: "String",
+							annotations: {
+								"pl7.app/label": "Score"
+							}
+						}
+					},
+					{ column: "parentId", spec: parentAxisSpec },
+					{ column: "position", spec: positionAxisSpec },
+					{
+						column: "state",
+						spec: {
+							name: "pl7.app/repertoire/state",
+							type: "String",
+							domain: {
+								"pl7.app/alphabet": alphabet
+							},
+							annotations: {
+								"pl7.app/label": stateAxisLabel,
+								"pl7.app/table/fontFamily": "monospace"
+							}
+						}
+					}
+				],
+				columns: [{
+					column: "cellValue",
+					spec: {
+						name: "pl7.app/repertoire/singleMutantValue",
+						valueType: "Double",
+						domain: {
+							"pl7.app/alphabet": alphabet
+						},
+						annotations: {
+							"pl7.app/label": "Single-mutant score",
+							"pl7.app/isScore": "true"
+						}
+					}
+				}],
+				storageFormat: "Parquet",
+				partitionKeyLength: 0
+			},
+			{ splitDataAndSpec: true }
+		)
+		lsPf := pframes.pFrameBuilder()
+		for k, v in lsCols {
+			lsPf.add(k, trace.inject(v.spec), v.data)
+		}
+		// Same position-keyed region + parent-residue tracks as the state heat map — this plot
+		// shares the position (X) axis and the selected parent, so they align.
+		if hasRegion {
+			for k, v in regionCols {
+				lsPf.add("region/" + k, trace.inject(v.spec), v.data)
+			}
+		}
+		for k, v in parentCols {
+			lsPf.add("parent/" + k, trace.inject(v.spec), v.data)
+		}
+		outputs.singleMutantHeatmapPf = pframes.exportFrame(lsPf.build())
 	}
 
 	// --- Composition heat map import + export (optional) ---

@@ -26,6 +26,7 @@
   "devDependencies": {
     "@milaboratories/ts-builder": "catalog:",
     "@milaboratories/ts-configs": "catalog:",
+    "@platforma-open/milaboratories.repertoire-mutation-heatmap.kind": "workspace:*",
     "@platforma-open/milaboratories.repertoire-mutation-heatmap.model": "workspace:*",
     "@platforma-open/milaboratories.repertoire-mutation-heatmap.ui": "workspace:*",
     "@platforma-open/milaboratories.repertoire-mutation-heatmap.workflow": "workspace:*",
@@ -41,11 +42,11 @@
       "ui": "@platforma-open/milaboratories.repertoire-mutation-heatmap.ui/dist"
     },
     "meta": {
-      "title": "Deep Mutational Scanning",
+      "title": "Mutation Explorer",
       "logo": "file:logos/block-logo.png",
       "url": "https://github.com/platforma-open/repertoire-mutation-heatmap",
       "support": "mailto:support@milaboratories.com",
-      "description": "Visualizes deep mutational scanning libraries as position × residue mutation-enrichment heatmaps over a live-filtered variant subset, plus a known-variant × sample abundance heatmap.",
+      "description": "Maps deep mutational scanning libraries at position × residue: a mutation landscape of per-variant scores over single mutants, and per-position residue enrichment across selection rounds.",
       "longDescription": "file:docs/description.md",
       "tags": [
         "downstream",
