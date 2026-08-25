@@ -119,8 +119,8 @@ const parentOptionsDisplay = computed(() => {
     <template #tooltip>
       The number that colours each cell. Pick a value measured for each variant, such as a Tite-Seq
       affinity or a Sort-Seq bin score. Each cell shows the single mutant carrying that one
-      substitution, and its own measured value. Values are never averaged over other variants sharing
-      the substitution. A cell stays blank when no single mutant carried it.
+      substitution, and its own measured value. Values are never averaged over other variants
+      sharing the substitution. A cell stays blank when no single mutant carried it.
     </template>
   </PlDropdownMulti>
 
