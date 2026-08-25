@@ -377,7 +377,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
 
   .output("isRunning", (ctx) => ctx.outputs?.getIsReadyOrError() === false)
 
-  .title(() => "Deep Mutational Scanning")
+  .title(() => "Mutation Explorer")
 
   // Subtitle: custom label if the user renamed the block, else the selected dataset's name
   // (snapshotted into data by the UI on selection), else a prompt. The subtitle context is

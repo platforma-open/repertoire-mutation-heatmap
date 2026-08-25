@@ -42,7 +42,7 @@
       "ui": "@platforma-open/milaboratories.repertoire-mutation-heatmap.ui/dist"
     },
     "meta": {
-      "title": "Deep Mutational Scanning",
+      "title": "Mutation Explorer",
       "logo": "file:logos/block-logo.png",
       "url": "https://github.com/platforma-open/repertoire-mutation-heatmap",
       "support": "mailto:support@milaboratories.com",

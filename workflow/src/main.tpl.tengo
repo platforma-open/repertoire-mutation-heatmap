@@ -1,4 +1,4 @@
-// Deep Mutational Scanning — workflow.
+// Mutation Explorer — workflow.
 //
 // The profiler emits the per-variant state matrix [variantKey, parentId, position] -> state.
 // This block reads it, scopes everything to one parent, and precalculates two position ×
@@ -380,7 +380,7 @@ wf.body(func(args) {
 	trace := pSpec.makeTrace(stateSpec, {
 		type: "milaboratories.repertoire-mutation-heatmap",
 		importance: 50,
-		label: "Deep Mutational Scanning"
+		label: "Mutation Explorer"
 	})
 
 	// Region annotation track: [position] -> region, keyed on the same position axis as the
