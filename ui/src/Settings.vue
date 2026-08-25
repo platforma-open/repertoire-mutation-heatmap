@@ -117,10 +117,10 @@ const parentOptionsDisplay = computed(() => {
     @update:model-value="(v: SUniversalPColumnId[]) => (app.model.data.scoreRefs = v)"
   >
     <template #tooltip>
-      Per-variant scores to plot per position. Only single-mutant variants are used, so each cell is
-      one variant's own score rather than an average over every variant carrying that residue. Cells
-      no single mutant covers are left empty. Without a score column the Mutation Landscape page has
-      nothing to draw.
+      The number that colours each cell. Pick a value measured for each variant, such as a Tite-Seq
+      affinity or a Sort-Seq bin score. Each cell shows the single mutant carrying that one
+      substitution, and its own measured value. Values are never averaged over other variants sharing
+      the substitution. A cell stays blank when no single mutant carried it.
     </template>
   </PlDropdownMulti>
 

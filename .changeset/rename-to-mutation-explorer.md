@@ -1,6 +1,7 @@
 ---
 "@platforma-open/milaboratories.repertoire-mutation-heatmap.block": patch
 "@platforma-open/milaboratories.repertoire-mutation-heatmap.model": patch
+"@platforma-open/milaboratories.repertoire-mutation-heatmap.ui": patch
 "@platforma-open/milaboratories.repertoire-mutation-heatmap.workflow": patch
 ---
 
@@ -21,3 +22,7 @@ Settings, rather than faceted by parent; and the region-membership track only ap
 profiler supplied a region scheme, so it is no longer described as always present. Sort-Seq is named
 alongside Tite-Seq as a score source, and the Enrichment view now says it draws one panel per
 non-baseline round.
+
+The "Score columns" tooltip is rewritten for a biologist: it now leads with what the setting does,
+names Tite-Seq and Sort-Seq as example sources, and drops the sentence about the page having nothing
+to draw, which the page's own empty state already says.
