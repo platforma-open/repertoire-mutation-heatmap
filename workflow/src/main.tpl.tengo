@@ -7,8 +7,9 @@
 //
 // Mutation landscape. Per-variant score columns plotted over the single-mutant subset only, so
 // a cell is one variant's own value rather than a summary over every genetic background the
-// substitution co-occurs with. Output: [score, parentId, position, state] -> cellValue, with
-// `score` as the facet axis. Present only when score columns are selected.
+// substitution co-occurs with. Output: ONE value column per selected score, each
+// [position, state] -> cellValue, scoped to the one selected parent. Present only when score
+// columns are selected.
 //
 // Enrichment analysis. Per-position, per-residue log2 fold change of residue composition in
 // each selection round against the baseline round. Output:
@@ -217,6 +218,8 @@ wf.body(func(args) {
 	mutCountEntries := columns.getColumns("mutationCount")
 	hasLandscape := !is_undefined(scoreRefs) && len(scoreRefs) > 0 &&
 		!is_undefined(mutCountEntries) && len(mutCountEntries) > 0
+	// Filled by the precalc, read by the import section after ptWf.run() — hence declared out here.
+	scoreMeta := []
 	if hasLandscape {
 		singleMutants := ptWf.frame(pt.p.column("mutCount", mutCountEntries[0])).
 			select(pt.axis(VARIANT_KEY_AXIS).alias("variantKey"), pt.col("mutCount")).
@@ -224,25 +227,23 @@ wf.body(func(args) {
 			select(pt.col("variantKey"))
 
 		// [variantKey, parentId, position, state] — one row per single-mutant variant, at the
-		// position/residue of its own substitution.
+		// position/residue of its own substitution. parentId is dropped again below.
 		mutCells := smDf.
 			join(singleMutants, { on: "variantKey", how: "inner" }).
 			join(parentResDf, { on: "position", how: "inner" }).
 			filter(pt.col("state").neq(pt.col("parentResidue"))).
 			select(pt.col("variantKey"), pt.col("parentId"), pt.col("position"), pt.col("state"))
 
-		// One long frame per selected score, tagged with a block-local `score` key, then stacked.
-		// GraphMaker orders facets by the axis label (numeric-collation sort) with no facet-order
-		// override, so the label leads with the arrangement index to render in the user's order —
-		// the same device the composition view uses for rounds.
-		scoreFrames := []
+		// One saved frame per score, NOT one stacked column under a shared `score` axis. A heatmap
+		// chart has exactly one colour scale — miplots4 takes the value extent across all facets
+		// and offers no per-facet colour option — so scores in different units cannot share a
+		// chart. One column per score gives each its own scale.
 		for i, ref in scoreRefs {
 			sSpec := columns.getSpec(ref)
 			scoreLabel := "Score " + string(i + 1)
 			if !is_undefined(sSpec) && !is_undefined(sSpec.annotations) && !is_undefined(sSpec.annotations["pl7.app/label"]) {
 				scoreLabel = sSpec.annotations["pl7.app/label"]
 			}
-			scoreKey := string(i + 1) + ". " + scoreLabel
 
 			// Header carries the loop index: every iteration adds its own frame to the
 			// same pt workflow, so a shared header would collide across scores.
@@ -252,36 +253,37 @@ wf.body(func(args) {
 				pt.col(sHeader).alias("scoreValue")
 			)
 
-			scoreFrames = scoreFrames + [
-				mutCells.
-					join(sDf, { on: "variantKey", how: "inner" }).
-					withColumns(pt.lit(scoreKey).alias("score")).
-					select(
-						pt.col("score"),
-						pt.col("parentId"),
-						pt.col("position"),
-						pt.col("state"),
-						pt.col("variantKey"),
-						// Cast so the stack below survives a mix of integer- and float-valued
-						// scores; the imported value column is Double regardless.
-						pt.col("scoreValue").cast("Double").alias("scoreValue")
-					)
-			]
-		}
-		landscapeDf := scoreFrames[0]
-		if len(scoreFrames) > 1 {
-			landscapeDf = pt.concat(scoreFrames)
-		}
+			scoreFile := "singleMutantLandscape_" + string(i) + ".tsv"
 
-		// Guarantee one row per cell. In a true single-mutant library exactly one variant covers
-		// a cell, so `first` IS that variant's value — no aggregation happens. The sort makes the
-		// outcome deterministic in the degenerate case where a library encodes the same
-		// substitution under two variant keys, instead of failing the import on duplicate keys.
-		landscapeDf.
-			sort(["score", "parentId", "position", "state", "variantKey"]).
-			groupBy("score", "parentId", "position", "state").
-			agg(pt.col("scoreValue").first().alias("cellValue")).
-			save("singleMutantLandscape.tsv")
+			// Guarantee one row per cell. In a true single-mutant library exactly one variant covers
+			// a cell, so `first` IS that variant's value — no aggregation happens. The sort makes the
+			// outcome deterministic in the degenerate case where a library encodes the same
+			// substitution under two variant keys, instead of failing the import on duplicate keys.
+			// No parentId: already scoped to one parent, so the axis would be constant — and
+			// GraphMaker demands every axis be consumed by an input, which put a one-choice
+			// "Show for" selector above the plot.
+			mutCells.
+				join(sDf, { on: "variantKey", how: "inner" }).
+				select(
+					pt.col("position"),
+					pt.col("state"),
+					pt.col("variantKey"),
+					// Cast so an integer-valued score still lands in the Double-typed imported
+					// column.
+					pt.col("scoreValue").cast("Double").alias("scoreValue")
+				).
+				sort(["position", "state", "variantKey"]).
+				groupBy("position", "state").
+				agg(pt.col("scoreValue").first().alias("cellValue")).
+				save(scoreFile)
+
+			scoreMeta = scoreMeta + [{
+				index: i,
+				label: scoreLabel,
+				ref: ref,
+				file: scoreFile
+			}]
+		}
 	}
 
 	// --- Composition-enrichment precalc (optional) ---
@@ -441,66 +443,66 @@ wf.body(func(args) {
 	outputs := {}
 
 	// --- Single-mutant landscape import + export (optional) ---
-	// [score, parentId, position, state] -> cellValue. parentId / position inherited from the
-	// profiler; score and state are block-local. One value column across every selected score,
-	// with `score` as the facet axis — so the maps render side by side, sharing one colour scale.
+	// One value column per score, each [position, state] -> cellValue, scoped to the selected
+	// parent. Position is inherited from the profiler; state is block-local. Neither score nor
+	// parent is an axis — see the precalc above.
 	// No in-block normalization: these are per-variant scores that arrive already normalized
 	// upstream, and dividing one by a position-column total would answer nothing.
 	if hasLandscape {
-		lsCols := xsv.importFile(
-			ptResult.getFile("singleMutantLandscape.tsv"),
-			"tsv",
-			{
-				axes: [
-					{
-						column: "score",
-						spec: {
-							name: "pl7.app/repertoire/landscapeScore",
-							type: "String",
-							annotations: {
-								"pl7.app/label": "Score"
+		lsPf := pframes.pFrameBuilder()
+		for m in scoreMeta {
+			lsCols := xsv.importFile(
+				ptResult.getFile(m.file),
+				"tsv",
+				{
+					axes: [
+						{ column: "position", spec: positionAxisSpec },
+						{
+							column: "state",
+							spec: {
+								name: "pl7.app/repertoire/state",
+								type: "String",
+								domain: {
+									"pl7.app/alphabet": alphabet
+								},
+								annotations: {
+									"pl7.app/label": stateAxisLabel,
+									"pl7.app/table/fontFamily": "monospace"
+								}
 							}
 						}
-					},
-					{ column: "parentId", spec: parentAxisSpec },
-					{ column: "position", spec: positionAxisSpec },
-					{
-						column: "state",
+					],
+					columns: [{
+						column: "cellValue",
 						spec: {
-							name: "pl7.app/repertoire/state",
-							type: "String",
+							name: "pl7.app/repertoire/singleMutantValue",
+							valueType: "Double",
 							domain: {
-								"pl7.app/alphabet": alphabet
+								"pl7.app/alphabet": alphabet,
+								// Every score column shares name and axes, so identity needs one
+								// differing key. Index only — the durable score identity is the
+								// ref annotation below.
+								"pl7.app/repertoire/landscapeScore": string(m.index)
 							},
 							annotations: {
-								"pl7.app/label": stateAxisLabel,
-								"pl7.app/table/fontFamily": "monospace"
+								"pl7.app/label": m.label,
+								"pl7.app/isScore": "true",
+								// The UI keys each chart's saved settings on this, so settings
+								// survive a reorder. Annotation, not domain: lineage, not identity.
+								"pl7.app/repertoire/landscapeScoreRef": m.ref,
+								"pl7.app/repertoire/landscapeScoreIndex": string(m.index)
 							}
 						}
-					}
-				],
-				columns: [{
-					column: "cellValue",
-					spec: {
-						name: "pl7.app/repertoire/singleMutantValue",
-						valueType: "Double",
-						domain: {
-							"pl7.app/alphabet": alphabet
-						},
-						annotations: {
-							"pl7.app/label": "Single-mutant score",
-							"pl7.app/isScore": "true"
-						}
-					}
-				}],
-				storageFormat: "Parquet",
-				partitionKeyLength: 0
-			},
-			{ splitDataAndSpec: true }
-		)
-		lsPf := pframes.pFrameBuilder()
-		for k, v in lsCols {
-			lsPf.add(k, trace.inject(v.spec), v.data)
+					}],
+					storageFormat: "Parquet",
+					partitionKeyLength: 0
+				},
+				{ splitDataAndSpec: true }
+			)
+			// Index prefix: every score's import returns the same keys into one frame.
+			for k, v in lsCols {
+				lsPf.add("score" + string(m.index) + "/" + k, trace.inject(v.spec), v.data)
+			}
 		}
 		// Same position-keyed region + parent-residue tracks as the state heat map — this plot
 		// shares the position (X) axis and the selected parent, so they align.

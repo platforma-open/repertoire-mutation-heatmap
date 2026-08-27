@@ -87,85 +87,98 @@ const parentOptionsDisplay = computed(() => {
 </script>
 
 <template>
-  <PlDropdownRef
-    :model-value="app.model.data.stateMatrixRef"
-    :options="app.model.outputs.stateMatrixOptions"
-    label="Select dataset"
-    clearable
-    required
-    @update:model-value="onSelectStateMatrix"
-  >
-  </PlDropdownRef>
-
-  <PlDropdown
-    :model-value="app.model.data.selectedParentId"
-    :options="parentOptionsDisplay"
-    label="Parent"
-    required
-    @update:model-value="(v?: string) => (app.model.data.selectedParentId = v ?? undefined)"
-  >
-    <template #tooltip> Select parent (alignment reference). </template>
-  </PlDropdown>
-
-  <!-- Per-variant scores plotted at their own substitution's cell. Top level, not an
-       accordion: this is the landing page's only input, so it should not need a click. -->
-  <PlDropdownMulti
-    :model-value="app.model.data.scoreRefs"
-    :options="app.model.outputs.scoreOptions ?? []"
-    label="Score columns"
-    clearable
-    @update:model-value="(v: SUniversalPColumnId[]) => (app.model.data.scoreRefs = v)"
-  >
-    <template #tooltip>
-      The number that colours each cell. Pick a value measured for each variant, such as a Tite-Seq
-      affinity or a Sort-Seq bin score. Each cell shows the single mutant carrying that one
-      substitution, and its own measured value. Values are never averaged over other variants
-      sharing the substitution. A cell stays blank when no single mutant carried it.
-    </template>
-  </PlDropdownMulti>
-
-  <PlElementList
-    v-if="app.model.data.scoreRefs.length > 0"
-    v-model:items="app.model.data.scoreRefs"
-  >
-    <template #item-title="{ item }">{{ scoreLabel(item) }}</template>
-  </PlElementList>
-  <div
-    v-if="app.model.data.scoreRefs.length > 1"
-    style="font-size: 12px; color: #888; margin-top: -8px"
-  >
-    Panels render in this order; drag to reorder. All panels share one colour scale, so compare
-    scores measured on the same units.
-  </div>
-
-  <!-- Composition-enrichment view: positional log2 fold change across selection rounds. -->
-  <PlAccordionSection v-model="compositionOpen" label="Enrichment Analysis">
-    <PlDropdownMulti
-      :model-value="app.model.data.roundFrequencyRefs"
-      :options="app.model.outputs.roundFrequencyOptions ?? []"
-      label="Round frequencies (from Enrichment)"
+  <!-- GraphMaker gives the block's settings slot no width, so without this the drawer grows to
+       fit the longest line of text. The gap replaces the one this wrapper displaces. -->
+  <div class="settings">
+    <PlDropdownRef
+      :model-value="app.model.data.stateMatrixRef"
+      :options="app.model.outputs.stateMatrixOptions"
+      label="Select dataset"
       clearable
-      @update:model-value="(v: SUniversalPColumnId[]) => (app.model.data.roundFrequencyRefs = v)"
+      required
+      @update:model-value="onSelectStateMatrix"
+    >
+    </PlDropdownRef>
+
+    <PlDropdown
+      :model-value="app.model.data.selectedParentId"
+      :options="parentOptionsDisplay"
+      label="Parent"
+      required
+      @update:model-value="(v?: string) => (app.model.data.selectedParentId = v ?? undefined)"
+    >
+      <template #tooltip> Select parent (alignment reference). </template>
+    </PlDropdown>
+
+    <!-- Per-variant scores plotted at their own substitution's cell. Top level, not an
+         accordion: this is the landing page's only input, so it should not need a click. -->
+    <PlDropdownMulti
+      :model-value="app.model.data.scoreRefs"
+      :options="app.model.outputs.scoreOptions ?? []"
+      label="Score columns"
+      clearable
+      @update:model-value="(v: SUniversalPColumnId[]) => (app.model.data.scoreRefs = v)"
     >
       <template #tooltip>
-        Per-round, per-variant frequency columns exported by an upstream Enrichment block. Pick the
-        rounds to compare; the heatmap shows, per position and residue, the log2 fold change of the
-        residue composition in each round versus the baseline round. Adds the "Enrichment Analysis"
-        page.
+        The number that colours each cell. Pick a value measured for each variant, such as a
+        Tite-Seq affinity or a Sort-Seq bin score. Each cell shows the single mutant carrying that
+        one substitution, and its own measured value. Values are never averaged over other variants
+        sharing the substitution. A cell stays blank when no single mutant carried it.
       </template>
     </PlDropdownMulti>
 
     <PlElementList
-      v-if="app.model.data.roundFrequencyRefs.length > 0"
-      v-model:items="app.model.data.roundFrequencyRefs"
+      v-if="app.model.data.scoreRefs.length > 0"
+      v-model:items="app.model.data.scoreRefs"
     >
-      <template #item-title="{ item }">{{ roundLabel(item) }}</template>
+      <template #item-title="{ item }">{{ scoreLabel(item) }}</template>
     </PlElementList>
     <div
-      v-if="app.model.data.roundFrequencyRefs.length > 0"
+      v-if="app.model.data.scoreRefs.length > 1"
       style="font-size: 12px; color: #888; margin-top: -8px"
     >
-      The first round is the baseline (R0); drag to reorder.
+      One chart per score, one tab each, in this order; drag to reorder. Each chart has its own
+      colour scale, so scores measured in different units are fine.
     </div>
-  </PlAccordionSection>
+
+    <!-- Composition-enrichment view: positional log2 fold change across selection rounds. -->
+    <PlAccordionSection v-model="compositionOpen" label="Enrichment Analysis">
+      <PlDropdownMulti
+        :model-value="app.model.data.roundFrequencyRefs"
+        :options="app.model.outputs.roundFrequencyOptions ?? []"
+        label="Round frequencies (from Enrichment)"
+        clearable
+        @update:model-value="(v: SUniversalPColumnId[]) => (app.model.data.roundFrequencyRefs = v)"
+      >
+        <template #tooltip>
+          Per-round, per-variant frequency columns exported by an upstream Enrichment block. Pick
+          the rounds to compare; the heatmap shows, per position and residue, the log2 fold change
+          of the residue composition in each round versus the baseline round. Adds the "Enrichment
+          Analysis" page.
+        </template>
+      </PlDropdownMulti>
+
+      <PlElementList
+        v-if="app.model.data.roundFrequencyRefs.length > 0"
+        v-model:items="app.model.data.roundFrequencyRefs"
+      >
+        <template #item-title="{ item }">{{ roundLabel(item) }}</template>
+      </PlElementList>
+      <div
+        v-if="app.model.data.roundFrequencyRefs.length > 0"
+        style="font-size: 12px; color: #888; margin-top: -8px"
+      >
+        The first round is the baseline (R0); drag to reorder.
+      </div>
+    </PlAccordionSection>
+  </div>
 </template>
+
+<style scoped>
+.settings {
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+</style>
