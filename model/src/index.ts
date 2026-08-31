@@ -40,6 +40,21 @@ function dedupByLeafId(recipes: ColumnRecipe[]): ColumnRecipe[] {
 // Profiler spec names used as join keys — must stay byte-identical to the names the profiler emits.
 const STATE_MATRIX = "pl7.app/repertoire/stateMatrix";
 
+// One such column per selected score. Must stay byte-identical to the workflow's import spec.
+const LANDSCAPE_VALUE = "pl7.app/repertoire/singleMutantValue";
+const LANDSCAPE_SCORE_REF = "pl7.app/repertoire/landscapeScoreRef";
+const LANDSCAPE_SCORE_INDEX = "pl7.app/repertoire/landscapeScoreIndex";
+
+/** One mutation-landscape chart. */
+export type LandscapePanel = {
+  /** The score column's own id — the key of this chart's state in `singleMutantHeatmapStates`. */
+  key: string;
+  label: string;
+  /** Position in the user's score order. */
+  index: number;
+  spec: PColumnSpec;
+};
+
 // Subtitle fallback when no dataset is selected yet.
 const NO_DATASET_LABEL = "No dataset selected";
 
@@ -72,8 +87,26 @@ export type BlockArgs = {
 /** UI view state kept out of the workflow args. */
 export type BlockUiState = {
   compositionHeatmapState: GraphMakerState;
+  /**
+   * Placeholder landscape chart, shown while no score column has produced data. Carries the
+   * page's empty state and its Settings drawer — on a fresh block, the only way into Settings.
+   */
   singleMutantHeatmapState: GraphMakerState;
+  /**
+   * One landscape chart per score, keyed by the score column's id (not its position, so settings
+   * survive a reorder). The UI creates entries as runs produce new score columns; a dropped
+   * score's entry is left behind, and comes back into use if the score is picked again.
+   */
+  singleMutantHeatmapStates: Record<string, GraphMakerState>;
+  /**
+   * Which score's chart is on screen, as a key into `singleMutantHeatmapStates`. Undefined, or
+   * naming a score no longer selected, means the first chart.
+   */
+  selectedLandscapeScore?: string;
 };
+
+/** Data version `v1`: one faceted landscape chart, so one chart state. */
+export type BlockDataV1 = Omit<BlockData, "singleMutantHeatmapStates" | "selectedLandscapeScore">;
 
 /** Unified persisted data: workflow-relevant selections + UI view state. */
 export type BlockData = {
@@ -93,17 +126,20 @@ export type BlockData = {
   scoreRefs: SUniversalPColumnId[];
 } & BlockUiState;
 
-const dataModel = new DataModelBuilder({ kind }).from<BlockData>("v1").init(() => ({
-  roundFrequencyRefs: [],
-  compositionEpsilon: 1e-6,
-  scoreRefs: [],
-  singleMutantHeatmapState: {
-    title: "Single Mutation Landscape",
+/**
+ * Default state for a mutation-landscape chart. Used by `init` for the placeholder and by the UI
+ * for each score a run produces, so the two look alike.
+ *
+ * @param currentTab `"settings"` opens the Settings drawer, `null` leaves it closed
+ */
+export function makeLandscapeChartState(
+  title: string,
+  currentTab: "settings" | null,
+): GraphMakerState {
+  return {
+    title,
     template: "heatmap",
-    // This is the landing page, so it opens with the Settings drawer out: a fresh block has no
-    // dataset and nothing to plot, and Settings is the first thing the user needs. The page
-    // closes it when a run starts.
-    currentTab: "settings",
+    currentTab,
     // Cells are per-variant scores taken directly, not counts — GraphMaker's row z-score and
     // transform would both distort them, and the values arrive already normalized upstream.
     layersSettings: {
@@ -112,18 +148,8 @@ const dataModel = new DataModelBuilder({ kind }).from<BlockData>("v1").init(() =
         transform: null,
       },
     },
-    // Square cells on the position axis, matching the enrichment map.
+    // Square cells, matching the enrichment map. No `facetColumns`: no facets left to lay out.
     axesSettings: {
-      // One facet per row. The pinned cellSize below lays the cell grid out at its natural
-      // size across the whole position range, but graph-maker's default facet grid is 3
-      // columns, so each panel frame gets a third of the width. The two disagree and the grid
-      // spills across and past the frames. Stacking the facets gives every panel the full
-      // width, so the pin and the frame agree, and panels line up position-for-position —
-      // which is the point of comparing them. The chart grows downward and scrolls, the same
-      // trade already taken on Y.
-      other: {
-        facetColumns: 1,
-      },
       axisX: {
         cellSize: 20,
       },
@@ -132,42 +158,56 @@ const dataModel = new DataModelBuilder({ kind }).from<BlockData>("v1").init(() =
         cellSize: 20,
       },
     },
-  },
-  compositionHeatmapState: {
-    title: "Enrichment Analysis",
-    template: "heatmap",
-    currentTab: null,
-    // Value is log2 fold change (signed); the diverging palette is applied via the
-    // GraphMaker `defaultPalette` prop on the page. Disable GraphMaker's own row
-    // normalization and transform so the linear log2FC is shown as-is.
-    layersSettings: {
-      heatmap: {
-        normalizationDirection: null,
-        transform: null,
+  };
+}
+
+const dataModel = new DataModelBuilder({ kind })
+  .from<BlockDataV1>("v1")
+  // Nothing to carry over: the v1 state described a chart that no longer exists.
+  .migrate<BlockData>("v2", (v1) => ({ ...v1, singleMutantHeatmapStates: {} }))
+  .init(() => ({
+    roundFrequencyRefs: [],
+    compositionEpsilon: 1e-6,
+    scoreRefs: [],
+    // The landing page opens with the Settings drawer out: a fresh block has nothing to plot,
+    // and Settings is the first thing the user needs. The page closes it when a run starts.
+    singleMutantHeatmapState: makeLandscapeChartState("Single Mutation Landscape", "settings"),
+    singleMutantHeatmapStates: {},
+    compositionHeatmapState: {
+      title: "Enrichment Analysis",
+      template: "heatmap",
+      currentTab: null,
+      // Value is log2 fold change (signed); the diverging palette is applied via the
+      // GraphMaker `defaultPalette` prop on the page. Disable GraphMaker's own row
+      // normalization and transform so the linear log2FC is shown as-is.
+      layersSettings: {
+        heatmap: {
+          normalizationDirection: null,
+          transform: null,
+        },
+      },
+      // Square cells on the position axis, matching the enrichment map.
+      axesSettings: {
+        // One facet per row. The pinned cellSize below lays the cell grid out at its natural
+        // size across the whole position range, but graph-maker's default facet grid is 3
+        // columns, so each panel frame gets a third of the width. The two disagree and the grid
+        // spills across and past the frames. Stacking the facets gives every panel the full
+        // width, so the pin and the frame agree, and panels line up position-for-position —
+        // which is the point of comparing them. The chart grows downward and scrolls, the same
+        // trade already taken on Y.
+        other: {
+          facetColumns: 1,
+        },
+        axisX: {
+          cellSize: 20,
+        },
+        axisY: {
+          hideAxisLabels: false,
+          cellSize: 20,
+        },
       },
     },
-    // Square cells on the position axis, matching the enrichment map.
-    axesSettings: {
-      // One facet per row. The pinned cellSize below lays the cell grid out at its natural
-      // size across the whole position range, but graph-maker's default facet grid is 3
-      // columns, so each panel frame gets a third of the width. The two disagree and the grid
-      // spills across and past the frames. Stacking the facets gives every panel the full
-      // width, so the pin and the frame agree, and panels line up position-for-position —
-      // which is the point of comparing them. The chart grows downward and scrolls, the same
-      // trade already taken on Y.
-      other: {
-        facetColumns: 1,
-      },
-      axisX: {
-        cellSize: 20,
-      },
-      axisY: {
-        hideAxisLabels: false,
-        cellSize: 20,
-      },
-    },
-  },
-}));
+  }));
 
 export const platforma = BlockModelV3.create({ dataModel, kind })
 
@@ -335,9 +375,10 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
 
   // --- Heat map outputs (filled by the workflow) ---
 
-  // Single-mutant landscape: per-score singleton values
-  // `[score, parentId, position, state] -> cellValue`. Present only when score columns are
-  // selected AND the profiler emitted a mutation count (the workflow emits it conditionally).
+  // Single-mutant landscape: one value column per score, each `[position, state] -> cellValue`,
+  // plus the two position-keyed annotation tracks. One frame serves every chart — a chart reads
+  // only the value column it is given. Present only when score columns are selected AND the
+  // profiler emitted a mutation count (the workflow emits it conditionally).
   .outputWithStatus("singleMutantHeatmapPf", (ctx): PFrameHandle | undefined => {
     try {
       const pCols = ctx.outputs?.resolve("singleMutantHeatmapPf")?.getPColumns();
@@ -353,6 +394,36 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     } catch {
       return undefined;
     }
+  })
+
+  // One chart per score column the last run produced, in the user's score order. Read from the
+  // produced columns, not `data.scoreRefs`: while the block is stale the two disagree, and the
+  // columns are what is actually on screen.
+  .output("landscapePanels", (ctx): LandscapePanel[] | undefined => {
+    let pCols;
+    try {
+      pCols = ctx.outputs?.resolve("singleMutantHeatmapPf")?.getPColumns();
+    } catch {
+      return undefined;
+    }
+    if (pCols === undefined) return undefined;
+
+    const panels: LandscapePanel[] = [];
+    for (const col of pCols) {
+      if (col.spec.name !== LANDSCAPE_VALUE) continue;
+      const key = col.spec.annotations?.[LANDSCAPE_SCORE_REF];
+      // Pre-per-score-charts run: no ref, so no state key. Such a project shows the empty state
+      // until it is re-run.
+      if (key === undefined) continue;
+      panels.push({
+        key,
+        label: col.spec.annotations?.["pl7.app/label"] ?? "Score",
+        index: Number(col.spec.annotations?.[LANDSCAPE_SCORE_INDEX] ?? "0"),
+        spec: col.spec,
+      });
+    }
+    panels.sort((a, b) => a.index - b.index);
+    return panels;
   })
 
   // Composition-enrichment heat map: per-round positional log2 fold change
