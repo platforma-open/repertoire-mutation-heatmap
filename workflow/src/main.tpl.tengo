@@ -43,6 +43,14 @@ wf.prepare(func(args) {
 		name: "pl7.app/repertoire/regionAnnotation",
 		axes: [{ anchor: "main", idx: 1 }, { anchor: "main", idx: 2 }]
 	}, "regionAnnotation")
+	// The narrower reading of the same membership, present only when the profiler run
+	// subdivided a region: a graft reads as itself rather than as the region containing it.
+	// addMulti for the same reason as above — it is absent on any run without grafts, and on
+	// every run made before the profiler emitted it.
+	bb.addMulti({
+		name: "pl7.app/repertoire/subRegionAnnotation",
+		axes: [{ anchor: "main", idx: 1 }, { anchor: "main", idx: 2 }]
+	}, "subRegionAnnotation")
 	// Parent residue per position [parentId, position] -> residue, from the profiler — the
 	// reference the single-mutant predicate differences against. Matched on the same
 	// state-matrix axes as the region track. addMulti so a run made before the profiler
@@ -144,7 +152,17 @@ wf.body(func(args) {
 	// selected parent first, so the position-keyed collapse is exact for that parent. Emitted only
 	// when the profiler supplied region data (aa state matrix with a region scheme); otherwise the
 	// bundle query is empty and no track is produced.
-	regionEntries := columns.getColumns("regionAnnotation")
+	//
+	// The profiler exports two readings of the same membership — the widest region containing
+	// each position, and the narrowest. This draws ONE band, preferring the narrow one where it
+	// exists: its names already carry their framework (CDR2_N, Graft, CDR2_C are readably parts
+	// of CDR2), so a second band above it would repeat what the reader can see and cost a row of
+	// vertical space on every map. The narrow column is absent unless a region was subdivided,
+	// so a run without grafts falls through to the wide one and looks exactly as it did before.
+	regionEntries := columns.getColumns("subRegionAnnotation")
+	if is_undefined(regionEntries) || len(regionEntries) == 0 {
+		regionEntries = columns.getColumns("regionAnnotation")
+	}
 	hasRegion := !is_undefined(regionEntries) && len(regionEntries) > 0
 	if hasRegion {
 		regionDf := ptWf.frame(pt.p.column("region", regionEntries[0])).select(
