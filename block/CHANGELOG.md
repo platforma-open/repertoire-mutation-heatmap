@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.block
 
+## 1.1.5
+
+### Patch Changes
+
+- 7790914: Raise the SDK catalog to latest and enable the block test suite in CI
+
 ## 1.1.4
 
 ### Patch Changes
