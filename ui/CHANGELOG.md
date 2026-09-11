@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.ui
 
+## 1.1.5
+
+### Patch Changes
+
+- 0dfe475: update graph-maker version
+
 ## 1.1.4
 
 ### Patch Changes
