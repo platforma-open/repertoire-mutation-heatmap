@@ -393,6 +393,20 @@ wf.body(func(args) {
 			select(pt.col("round"), pt.col("parentId"), pt.col("position"), pt.col("state"), pt.col("log2fc"))
 
 		compDf.save("compositionHeatmap.tsv")
+
+		// Per-cell flag marking the parent residue at each position, for GraphMaker's Highlight
+		// input: the cell whose state IS the parent is outlined, the rest are not. Keyed
+		// [parentId, position, state] — a subset of the composition cell's axes, so every round
+		// gets the same marking from one column.
+		//
+		// A SUBSET column: only the parent cells are present, and a cell absent from it reads as
+		// null after the join, which is what `pl7.app/isSubset` tells GraphMaker to filter on.
+		// The same grid the cells come from, so a marked cell always has a cell to mark.
+		parentFlagDf := cells.join(parentResDf, { on: "position", how: "inner" }).
+			filter(pt.col("state").eq(pt.col("parentResidue"))).
+			withColumns(pt.lit(1).alias("isParentResidue")).
+			select(pt.col("parentId"), pt.col("position"), pt.col("state"), pt.col("isParentResidue"))
+		parentFlagDf.save("parentResidueFlag.tsv")
 	}
 
 	ptResult := ptWf.run()
@@ -592,9 +606,60 @@ wf.body(func(args) {
 			},
 			{ splitDataAndSpec: true }
 		)
+		// Parent-residue marking, [parentId, position, state] -> 1 for the parent cell only.
+		// Absent everywhere else, so the Highlight input's subset filter outlines exactly those
+		// cells. Shares parentId / position / state with the value column, so GraphMaker accepts
+		// it as a per-cell source.
+		parentFlagCols := xsv.importFile(
+			ptResult.getFile("parentResidueFlag.tsv"),
+			"tsv",
+			{
+				axes: [
+					{ column: "parentId", spec: parentAxisSpec },
+					{ column: "position", spec: positionAxisSpec },
+					{
+						column: "state",
+						spec: {
+							name: "pl7.app/repertoire/state",
+							type: "String",
+							domain: {
+								"pl7.app/alphabet": alphabet
+							},
+							annotations: {
+								"pl7.app/label": stateAxisLabel,
+								"pl7.app/table/fontFamily": "monospace"
+							}
+						}
+					}
+				],
+				columns: [{
+					column: "isParentResidue",
+					spec: {
+						name: "pl7.app/repertoire/isParentResidue",
+						valueType: "Int",
+						domain: {
+							"pl7.app/alphabet": alphabet
+						},
+						annotations: {
+							"pl7.app/label": (alphabet == "aminoacid") ? "Is parent AA" : "Is parent NT",
+							// Present-or-absent, not a number: GraphMaker's Highlight input then
+							// defaults to the subset filter instead of asking for a range.
+							"pl7.app/isSubset": "true"
+						}
+					}
+				}],
+				storageFormat: "Parquet",
+				partitionKeyLength: 0
+			},
+			{ splitDataAndSpec: true }
+		)
+
 		compPf := pframes.pFrameBuilder()
 		for k, v in compCols {
 			compPf.add(k, trace.inject(v.spec), v.data)
+		}
+		for k, v in parentFlagCols {
+			compPf.add("parentFlag/" + k, trace.inject(v.spec), v.data)
 		}
 		// Same position-keyed region + parent-residue tracks as the state heat map — the
 		// composition plot shares the position (X) axis and the selected parent, so they align.
