@@ -160,6 +160,9 @@ export function makeLandscapeChartState(
     axesSettings: {
       axisX: {
         cellSize: 20,
+        // Two-part labels ("32, D": position, then the residue it started as) are too wide to sit
+        // flat under a 20px column.
+        axisLabelsAngle: 45,
       },
       axisY: {
         hideAxisLabels: false,
@@ -238,6 +241,8 @@ const dataModel = new DataModelBuilder({ kind })
         },
         axisX: {
           cellSize: 20,
+          // Two-part labels ("32, D": position, then the residue it started as).
+          axisLabelsAngle: 45,
         },
         axisY: {
           hideAxisLabels: false,

@@ -57,21 +57,23 @@ watch(
   },
 );
 
-// Tracks under the position (X) axis. Position-keyed, so the same two columns serve every score.
-// Region only when the profiler supplied a region scheme.
-const annotationOptions = computed((): PredefinedGraphOption<"heatmap">[] => {
-  const pCols = app.model.outputs.singleMutantHeatmapPCols;
-  if (!pCols) return [];
-  const options: PredefinedGraphOption<"heatmap">[] = [];
-  const regionCol = pCols.find((p) => p.spec.name === "pl7.app/repertoire/regionAnnotation");
-  if (regionCol) {
-    options.push({ inputName: "annotationsX", selectedSource: regionCol.spec });
-  }
-  const parentCol = pCols.find((p) => p.spec.name === "pl7.app/repertoire/parentResidue");
-  if (parentCol) {
-    options.push({ inputName: "annotationsX", selectedSource: parentCol.spec });
-  }
-  return options;
+// Region track under the position (X) axis, position-keyed, so it serves every score. Only when the
+// profiler supplied a region scheme.
+const regionOption = computed((): PredefinedGraphOption<"heatmap">[] => {
+  const regionCol = app.model.outputs.singleMutantHeatmapPCols?.find(
+    (p) => p.spec.name === "pl7.app/repertoire/regionAnnotation",
+  );
+  return regionCol ? [{ inputName: "annotationsX", selectedSource: regionCol.spec }] : [];
+});
+
+// Parent residue as the second part of the X axis label rather than a track beneath it, so each
+// column reads "32, D" — the position and the residue it started as. It is position-keyed, and
+// position is already the first X source, so the heatmap accepts it as an X source too.
+const parentAxisOption = computed((): PredefinedGraphOption<"heatmap">[] => {
+  const parentCol = app.model.outputs.singleMutantHeatmapPCols?.find(
+    (p) => p.spec.name === "pl7.app/repertoire/parentResidue",
+  );
+  return parentCol ? [{ inputName: "x", selectedSource: parentCol.spec }] : [];
 });
 
 // X = position, Y = state, colour = the single-mutant variant's own score. A cell is NOT a
@@ -88,9 +90,10 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
   const options: PredefinedGraphOption<"heatmap">[] = [
     { inputName: "value", selectedSource: spec },
     { inputName: "x", selectedSource: axes[0] }, // position
+    ...parentAxisOption.value, // then parent residue, so the label reads "position, parent"
     { inputName: "y", selectedSource: axes[1] }, // state
     { inputName: "tooltipContent", selectedSource: axes[1] }, // show State in the tooltip
-    ...annotationOptions.value,
+    ...regionOption.value,
   ];
 
   // Outline the parent residue at each position — the unmutated reference every score is measured

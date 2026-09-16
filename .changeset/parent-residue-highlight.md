@@ -19,4 +19,9 @@ picture, not only on the annotation track beneath it.
 - a `v3` migration pins "Treat NA value as: empty" on landscape charts saved before this, which
   would otherwise paint every uncovered substitution as a real zero
 
+Parent residue also moves from an annotation track to the second part of the X axis label, so each
+column reads "32, D" — the position and the residue it started as — rotated 45° to fit. The region
+track stays where it is. Charts saved before this keep their current layout; graph-maker applies a
+default only to an input it has not filled before.
+
 Needs the graph-maker release that adds the heat map Highlight input.
