@@ -21,7 +21,7 @@ picture, not only on the annotation track beneath it.
 
 Parent residue also moves from an annotation track to the second part of the X axis label, so each
 column reads "32, D" — the position and the residue it started as — rotated 45° to fit. The region
-track stays where it is. Charts saved before this keep their current layout; graph-maker applies a
-default only to an input it has not filled before.
+track stays where it is. A `v4` migration angles the labels of charts saved before this, which the
+defaults cannot reach: the angle is a chart's own axes setting, seeded once when it is created.
 
 Needs the graph-maker release that adds the heat map Highlight input.

@@ -111,6 +111,9 @@ export type BlockDataV1 = Omit<BlockData, "singleMutantHeatmapStates" | "selecte
 /** Data version `v2`: today's shape. `v3` rewrites values inside it, and adds no field. */
 export type BlockDataV2 = BlockData;
 
+/** Data version `v3`: the same shape again; `v4` only rewrites chart states. */
+export type BlockDataV3 = BlockData;
+
 /** Unified persisted data: workflow-relevant selections + UI view state. */
 export type BlockData = {
   // Block label shown as the subtitle. `customBlockLabel` is the user-renamed override;
@@ -192,11 +195,90 @@ function withEmptyNAValue(state: GraphMakerState): GraphMakerState {
   };
 }
 
+/**
+ * The parent-residue column's key inside both heat-map frames, as it appears inside a saved
+ * selector's source id. Distinct from the highlight flag's `parentFlag/isParentResidue`, which
+ * contains this word too but not this path.
+ */
+const PARENT_RESIDUE_SOURCE = "parent/parentResidue";
+
+const carriesParentResidue = (selectedSource: string) =>
+  selectedSource.includes(PARENT_RESIDUE_SOURCE);
+
+/**
+ * Angles the X labels of a chart saved before the parent residue joined the axis, and moves the
+ * source across.
+ *
+ * The move is belt and braces — graph-maker reapplies a default whose value has changed, so it
+ * would arrive anyway — but the angle is not a default option. It lives in the chart's own axes
+ * settings, which are seeded once when the chart is created, so without this an existing chart gets
+ * the two-part label flat and overlapping under a 20px column.
+ *
+ * Keyed on the parent still being an annotation track, which is what "saved before this" looks
+ * like. The region track is deliberately left where it is.
+ */
+export function withParentOnXAxis(state: GraphMakerState): GraphMakerState {
+  const options = state.optionsState;
+  if (options?.type !== "heatmap") {
+    return state;
+  }
+  const annotations = options.components.annotationsX.selectorStates;
+  const parent = annotations.find((selector) => carriesParentResidue(selector.selectedSource));
+  if (!parent) {
+    // No parent track to move — and no second label part, so tilting the labels would buy nothing.
+    return state;
+  }
+  const alreadyOnX = options.components.x.selectorStates.some((selector) =>
+    carriesParentResidue(selector.selectedSource),
+  );
+  return {
+    ...state,
+    optionsState: {
+      ...options,
+      components: {
+        ...options.components,
+        // Appended, so position stays the first part and the label reads in that order.
+        x: alreadyOnX
+          ? options.components.x
+          : {
+              type: "simple",
+              selectorStates: [...options.components.x.selectorStates, parent],
+            },
+        annotationsX: {
+          type: "simple",
+          selectorStates: annotations.filter((selector) => selector !== parent),
+        },
+      },
+    },
+    axesSettings: {
+      ...state.axesSettings,
+      axisX: { ...state.axesSettings?.axisX, axisLabelsAngle: 45 },
+    },
+  };
+}
+
+/** Applies a rewrite to every chart state the block keeps. */
+function mapChartStates(
+  data: BlockData,
+  rewrite: (state: GraphMakerState) => GraphMakerState,
+): Pick<
+  BlockData,
+  "compositionHeatmapState" | "singleMutantHeatmapState" | "singleMutantHeatmapStates"
+> {
+  return {
+    compositionHeatmapState: rewrite(data.compositionHeatmapState),
+    singleMutantHeatmapState: rewrite(data.singleMutantHeatmapState),
+    singleMutantHeatmapStates: Object.fromEntries(
+      Object.entries(data.singleMutantHeatmapStates).map(([key, state]) => [key, rewrite(state)]),
+    ),
+  };
+}
+
 const dataModel = new DataModelBuilder({ kind })
   .from<BlockDataV1>("v1")
   // Nothing to carry over: the v1 state described a chart that no longer exists.
   .migrate<BlockDataV2>("v2", (v1) => ({ ...v1, singleMutantHeatmapStates: {} }))
-  .migrate<BlockData>("v3", (v2) => ({
+  .migrate<BlockDataV3>("v3", (v2) => ({
     ...v2,
     singleMutantHeatmapState: withEmptyNAValue(v2.singleMutantHeatmapState),
     singleMutantHeatmapStates: Object.fromEntries(
@@ -206,6 +288,7 @@ const dataModel = new DataModelBuilder({ kind })
       ]),
     ),
   }))
+  .migrate<BlockData>("v4", (v3) => ({ ...v3, ...mapChartStates(v3, withParentOnXAxis) }))
   .init(() => ({
     roundFrequencyRefs: [],
     compositionEpsilon: 1e-6,

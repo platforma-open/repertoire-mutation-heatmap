@@ -8,6 +8,9 @@
     "check": "ts-builder check --target block-test",
     "test": "vitest run --passWithNoTests"
   },
+  "dependencies": {
+    "@platforma-open/milaboratories.repertoire-mutation-heatmap.model": "workspace:*"
+  },
   "devDependencies": {
     "@milaboratories/ts-builder": "catalog:",
     "@milaboratories/ts-configs": "catalog:",
