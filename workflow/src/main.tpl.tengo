@@ -110,6 +110,30 @@ wf.body(func(args) {
 	// Y-axis (state) label, alphabet-aware: residues for the aa matrix, bases for nt.
 	stateAxisLabel := (alphabet == "aminoacid") ? "Amino Acids" : "Nucleotides"
 
+	// The landscape's cell is (position, state), and its parent-residue cell is ABSENT by
+	// construction: a single mutant differs from its parent, so no variant carries the parent
+	// residue at its own position. Marking that cell needs it to exist, so both cell axes are
+	// declared dense and graph-maker asks the engine for the full position x state grid, with an
+	// absent value wherever no single mutant covered the substitution. Identity is name + type +
+	// domain, so these annotated copies still join with the position-keyed annotation tracks.
+	densePositionAxisSpec := maps.deepMerge(positionAxisSpec, {
+		annotations: { "pl7.app/graph/isDenseAxis": "true" }
+	})
+	stateAxisSpecBase := {
+		name: "pl7.app/repertoire/state",
+		type: "String",
+		domain: {
+			"pl7.app/alphabet": alphabet
+		},
+		annotations: {
+			"pl7.app/label": stateAxisLabel,
+			"pl7.app/table/fontFamily": "monospace"
+		}
+	}
+	denseStateAxisSpec := maps.deepMerge(stateAxisSpecBase, {
+		annotations: { "pl7.app/graph/isDenseAxis": "true" }
+	})
+
 	// --- Shared frames ---
 	// Every PColumn is read straight through pframes-rs: pt.p.column emits a
 	// `read_frame` step, which is a lazy parquet scan (and the one read path ptabler
@@ -216,6 +240,15 @@ wf.body(func(args) {
 			agg(pt.col("state").cast("String").first().alias("parentResidue"))
 	}
 	parentResDf.save("parentResidue.tsv")
+
+	// Per-cell parent marking for the landscape: [position, state] -> 1 at the one cell per
+	// position whose state IS the parent residue. Present only there, so GraphMaker's Highlight
+	// input filters it as a subset ("has a value") and outlines exactly those cells. These are
+	// the cells the densified grid supplies and the single-mutant data never does.
+	parentFlagLandscapeDf := parentResDf.
+		select(pt.col("position"), pt.col("parentResidue").alias("state")).
+		withColumns(pt.lit(1).alias("isParentResidue"))
+	parentFlagLandscapeDf.save("parentResidueFlagLandscape.tsv")
 
 	// --- Mutation landscape precalc (optional) ---
 	// The singleton cell mode: a cell holds the value of the ONE single-mutant variant carrying
@@ -488,21 +521,8 @@ wf.body(func(args) {
 				"tsv",
 				{
 					axes: [
-						{ column: "position", spec: positionAxisSpec },
-						{
-							column: "state",
-							spec: {
-								name: "pl7.app/repertoire/state",
-								type: "String",
-								domain: {
-									"pl7.app/alphabet": alphabet
-								},
-								annotations: {
-									"pl7.app/label": stateAxisLabel,
-									"pl7.app/table/fontFamily": "monospace"
-								}
-							}
-						}
+						{ column: "position", spec: densePositionAxisSpec },
+						{ column: "state", spec: denseStateAxisSpec }
 					],
 					columns: [{
 						column: "cellValue",
@@ -545,6 +565,41 @@ wf.body(func(args) {
 		}
 		for k, v in parentCols {
 			lsPf.add("parent/" + k, trace.inject(v.spec), v.data)
+		}
+		// Parent-residue marking, [position, state] -> 1 on the parent cell only. Its axes are
+		// the cell's own, so GraphMaker accepts it as a per-cell source for Highlight; the
+		// non-dense copies are deliberate, since this column has no holes to fill.
+		parentFlagLsCols := xsv.importFile(
+			ptResult.getFile("parentResidueFlagLandscape.tsv"),
+			"tsv",
+			{
+				axes: [
+					{ column: "position", spec: positionAxisSpec },
+					{ column: "state", spec: stateAxisSpecBase }
+				],
+				columns: [{
+					column: "isParentResidue",
+					spec: {
+						name: "pl7.app/repertoire/isParentResidue",
+						valueType: "Int",
+						domain: {
+							"pl7.app/alphabet": alphabet
+						},
+						annotations: {
+							"pl7.app/label": (alphabet == "aminoacid") ? "Is parent AA" : "Is parent NT",
+							// Present-or-absent, not a number: GraphMaker's Highlight input then
+							// defaults to the subset filter instead of asking for a range.
+							"pl7.app/isSubset": "true"
+						}
+					}
+				}],
+				storageFormat: "Parquet",
+				partitionKeyLength: 0
+			},
+			{ splitDataAndSpec: true }
+		)
+		for k, v in parentFlagLsCols {
+			lsPf.add("parentFlag/" + k, trace.inject(v.spec), v.data)
 		}
 		outputs.singleMutantHeatmapPf = pframes.exportFrame(lsPf.build())
 	}

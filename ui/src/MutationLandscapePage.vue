@@ -85,13 +85,30 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
   if (!spec || !axes) return undefined;
   // Axis order: [position, state]. GraphMaker requires every axis of a heatmap's value column to
   // be consumed by an input; x and y take both, so no selector appears above the plot.
-  return [
+  const options: PredefinedGraphOption<"heatmap">[] = [
     { inputName: "value", selectedSource: spec },
     { inputName: "x", selectedSource: axes[0] }, // position
     { inputName: "y", selectedSource: axes[1] }, // state
     { inputName: "tooltipContent", selectedSource: axes[1] }, // show State in the tooltip
     ...annotationOptions.value,
   ];
+
+  // Outline the parent residue at each position — the unmutated reference every score is measured
+  // against — the way published deep-mutational-scanning figures mark it. The cell itself has no
+  // single mutant by construction; the value column's dense axes are what make it exist at all.
+  // The column is present only on those cells, so `subset` ("has a value") marks exactly them.
+  // Not locked: the user can clear it or point the Highlight at something else.
+  const pCols = app.model.outputs.singleMutantHeatmapPCols;
+  const parentFlagCol = pCols?.find((p) => p.spec.name === "pl7.app/repertoire/isParentResidue");
+  if (parentFlagCol) {
+    options.push({
+      inputName: "highlight",
+      selectedSource: parentFlagCol.spec,
+      filterType: "subset",
+    });
+  }
+
+  return options;
 });
 </script>
 

@@ -108,6 +108,9 @@ export type BlockUiState = {
 /** Data version `v1`: one faceted landscape chart, so one chart state. */
 export type BlockDataV1 = Omit<BlockData, "singleMutantHeatmapStates" | "selectedLandscapeScore">;
 
+/** Data version `v2`: today's shape. `v3` rewrites values inside it, and adds no field. */
+export type BlockDataV2 = BlockData;
+
 /** Unified persisted data: workflow-relevant selections + UI view state. */
 export type BlockData = {
   // Block label shown as the subtitle. `customBlockLabel` is the user-renamed override;
@@ -146,6 +149,11 @@ export function makeLandscapeChartState(
       heatmap: {
         normalizationDirection: null,
         transform: null,
+        // The landscape's cell axes are declared dense, so the grid carries a record for every
+        // (position, state) and the ones no single mutant covers arrive with no value. `null`
+        // keeps those empty; the default of 0 would paint them as real cells at the bottom of
+        // the colour scale, filling the map with substitutions that were never measured.
+        NAValueAs: null,
       },
     },
     // Square cells, matching the enrichment map. No `facetColumns`: no facets left to lay out.
@@ -161,10 +169,40 @@ export function makeLandscapeChartState(
   };
 }
 
+/**
+ * Pins "Treat NA value as: empty" on a landscape chart's saved state.
+ *
+ * The landscape's cell axes are declared dense, so the grid now carries a record for every
+ * (position, state) and the substitutions no single mutant covered arrive with no value. They
+ * must stay empty. Seeding `makeLandscapeChartState` only reaches charts created from now on:
+ * graph-maker writes its whole merged layer settings back into the state it is bound to, so any
+ * chart opened before this change has the old default of 0 pinned in its own state, and would
+ * paint every uncovered substitution as a real zero-valued cell.
+ */
+function withEmptyNAValue(state: GraphMakerState): GraphMakerState {
+  return {
+    ...state,
+    layersSettings: {
+      ...state.layersSettings,
+      heatmap: { ...state.layersSettings?.heatmap, NAValueAs: null },
+    },
+  };
+}
+
 const dataModel = new DataModelBuilder({ kind })
   .from<BlockDataV1>("v1")
   // Nothing to carry over: the v1 state described a chart that no longer exists.
-  .migrate<BlockData>("v2", (v1) => ({ ...v1, singleMutantHeatmapStates: {} }))
+  .migrate<BlockDataV2>("v2", (v1) => ({ ...v1, singleMutantHeatmapStates: {} }))
+  .migrate<BlockData>("v3", (v2) => ({
+    ...v2,
+    singleMutantHeatmapState: withEmptyNAValue(v2.singleMutantHeatmapState),
+    singleMutantHeatmapStates: Object.fromEntries(
+      Object.entries(v2.singleMutantHeatmapStates).map(([key, state]) => [
+        key,
+        withEmptyNAValue(state),
+      ]),
+    ),
+  }))
   .init(() => ({
     roundFrequencyRefs: [],
     compositionEpsilon: 1e-6,
