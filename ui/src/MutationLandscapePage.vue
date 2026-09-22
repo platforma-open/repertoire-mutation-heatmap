@@ -4,7 +4,7 @@ import { GraphMaker } from "@milaboratories/graph-maker";
 import { makeLandscapeChartState } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import { getUniqueSourceValuesWithLabels } from "@platforma-sdk/model";
 import type { PObjectId } from "@platforma-sdk/model";
-import { PlTabs } from "@platforma-sdk/ui-vue";
+import { PlAlert, PlTabs } from "@platforma-sdk/ui-vue";
 import { computed, ref, watch } from "vue";
 import { useApp } from "./app";
 import { useDrillDowns } from "./drillDown";
@@ -106,6 +106,8 @@ const PARENT_RESIDUE = "pl7.app/repertoire/parentResidue";
 
 /** Substitutions worth opening — the ones with at least one co-occurring variant. */
 const browsable = ref<Set<string>>(new Set());
+/** The enumeration above is async; until it settles an empty set means "not known yet". */
+const browsableLoaded = ref(false);
 watch(
   () => ({
     pframe: app.model.outputs.browsableMutationsPf,
@@ -114,6 +116,7 @@ watch(
   async ({ pframe, colId }) => {
     if (!pframe || !colId) {
       browsable.value = new Set();
+      browsableLoaded.value = false;
       return;
     }
     try {
@@ -122,11 +125,26 @@ watch(
         axisIdx: 0,
       });
       browsable.value = new Set(res.values.map((v) => v.value));
+      browsableLoaded.value = true;
     } catch {
       browsable.value = new Set();
+      browsableLoaded.value = false;
     }
   },
   { immediate: true },
+);
+
+/**
+ * True once the map has drawn and not one substitution in it appears inside a multi-mutant.
+ *
+ * Without this the block looks broken rather than empty: every cell's tooltip reads
+ * "Co-occurring variants 0" and every click does nothing, which is correct but indistinguishable
+ * from a feature that failed. Gated on `landscapeReady` so it never fires before the first run,
+ * when `browsable` is empty only because nothing has been computed yet.
+ */
+const landscapeReady = computed(() => (app.model.outputs.landscapePanels?.length ?? 0) > 0);
+const nothingToBrowse = computed(
+  () => landscapeReady.value && browsableLoaded.value && browsable.value.size === 0,
 );
 
 function onCellClick(cell: CellClickData) {
@@ -200,6 +218,11 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
     setup, so swapping the bound state without remounting would carry the previous score's
     settings over and write them into the new score's state.
   -->
+  <PlAlert v-if="nothingToBrowse" type="warn" icon>
+    No substitution in this dataset appears in a variant carrying more than one mutation, so there
+    are no combinations to browse. Every cell reports "Co-occurring variants 0" and opens nothing.
+  </PlAlert>
+
   <GraphMaker
     v-if="activePanel"
     :key="activePanel.key"

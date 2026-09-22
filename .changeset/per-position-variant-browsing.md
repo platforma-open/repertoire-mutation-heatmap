@@ -35,6 +35,10 @@ The landscape's tooltip now carries a **Co-occurring variants** count, so a cell
 has anything to browse before the click is spent. It is worth showing for its own sake: it says
 how well a substitution has been explored in combination, which is a fact about the library.
 
+When no substitution in a dataset appears inside a multi-mutant, the landscape says so. Nothing
+is browsable there, so every cell would report "Co-occurring variants 0" and open nothing —
+correct, but indistinguishable from a feature that failed.
+
 A drill-down is opened by clicking the cell. Only cells with at least one co-occurring variant
 respond — the rest would open a browser holding nothing but the singleton just clicked, so they
 keep the default cursor and do nothing. Needs the graph-maker release that adds the heat map
