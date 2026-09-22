@@ -30,11 +30,15 @@ predicate, so mutation membership needs no designator string parsed. Three new o
 co-occurrence count, the mutation-to-variant linker, and the partner pair map. A library with no
 multi-mutants produces an empty pair map and costs nothing.
 
-**Bounded to single and double mutants.** Expanding every variant would put the whole state
-matrix — variants x positions, tens of millions of rows on a real library — through the position
-join and the parent diff, which the landscape never paid because it discarded multi-mutants
-before expanding. Triples and beyond are therefore absent from the Table tab; they were never in
-the partner map, which is doubles by definition, so nothing drawn changes.
+Variants of any mutation count are covered: the Table tab lists every variant carrying the
+substitution, triples and beyond included, while the partner map draws doubles — which is what a
+partner map is.
+
+The ptabler step's RAM request is now set explicitly. It was sized from `f.size()`, which counts
+only inputs attached with `addFile()`, and this workflow attaches none — everything is read
+through `pt.p.column`. So the measured volume was zero and the run always received the 2 GiB
+floor, whatever the library: a ~1M variant profiling run gives a ~118M row state matrix and got
+the same request as a 2M row one. This affected the block before this feature existed.
 
 The landscape's tooltip now carries a **Co-occurring variants** count, so a cell says whether it
 has anything to browse before the click is spent. It is worth showing for its own sake: it says
