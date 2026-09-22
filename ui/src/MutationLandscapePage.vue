@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import type { PredefinedGraphOption } from "@milaboratories/graph-maker";
+import type { CellClickData, PredefinedGraphOption } from "@milaboratories/graph-maker";
 import { GraphMaker } from "@milaboratories/graph-maker";
 import { makeLandscapeChartState } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import { getUniqueSourceValuesWithLabels } from "@platforma-sdk/model";
 import type { PObjectId } from "@platforma-sdk/model";
-import { PlAutocomplete, PlTabs } from "@platforma-sdk/ui-vue";
+import { PlTabs } from "@platforma-sdk/ui-vue";
 import { computed, ref, watch } from "vue";
 import { useApp } from "./app";
 import { useDrillDowns } from "./drillDown";
@@ -94,14 +94,18 @@ const coOccurrenceOption = computed((): PredefinedGraphOption<"heatmap">[] => {
 
 // --- Browsing into a substitution ---
 //
-// TEMPORARY. The real affordance is clicking the cell, which miplots4 cannot do yet: its heatmap
-// wires onMouseOver and nothing else, and there is no cell-click emit to plumb through
-// graph-maker. This picker calls exactly the same `openDrillDown`, so when the click lands it is
-// the handler that changes and this control goes away.
+// A click on a cell opens the per-position variant browser for the substitution it names. The
+// cell gives a position and a residue; the parent residue at that position is the third part, and
+// it is already on the X axis as the second label part — so graph-maker hands back both X sources
+// and the designator is composed from them without a lookup.
 //
-// The options are the substitutions that HAVE a co-occurring variant — the same set a click will
-// be allowed to open, so the two never disagree about what is browsable.
-const browsableOptions = ref<{ value: string; label: string }[]>([]);
+// The workflow builds `mutationId` the same way (parent residue, position, state), and the two
+// must stay byte-identical: it is the axis value the drill-down's chart is pinned to.
+const POSITION_AXIS = "pl7.app/repertoire/position";
+const PARENT_RESIDUE = "pl7.app/repertoire/parentResidue";
+
+/** Substitutions worth opening — the ones with at least one co-occurring variant. */
+const browsable = ref<Set<string>>(new Set());
 watch(
   () => ({
     pframe: app.model.outputs.browsableMutationsPf,
@@ -109,7 +113,7 @@ watch(
   }),
   async ({ pframe, colId }) => {
     if (!pframe || !colId) {
-      browsableOptions.value = [];
+      browsable.value = new Set();
       return;
     }
     try {
@@ -117,27 +121,28 @@ watch(
         columnId: colId as PObjectId,
         axisIdx: 0,
       });
-      browsableOptions.value = res.values.map((v) => ({ value: v.value, label: v.label }));
+      browsable.value = new Set(res.values.map((v) => v.value));
     } catch {
-      browsableOptions.value = [];
+      browsable.value = new Set();
     }
   },
   { immediate: true },
 );
 
-// PlAutocomplete searches rather than listing: a deep-mutational-scanning library can carry
-// thousands of browsable substitutions, far past what a dropdown can show.
-async function searchBrowsable(query: string) {
-  const needle = query.trim().toLowerCase();
-  const all = browsableOptions.value;
-  const hits = needle ? all.filter((o) => o.label.toLowerCase().includes(needle)) : all;
-  return hits.slice(0, 50);
-}
+function onCellClick(cell: CellClickData) {
+  const position = cell.x.find((s) => s.spec?.name === POSITION_AXIS)?.value;
+  const parent = cell.x.find((s) => s.spec?.name === PARENT_RESIDUE)?.value;
+  // Y is the state axis, and it is the only source bound there.
+  const state = cell.y[0]?.value;
+  const scoreKey = activePanel.value?.key;
+  if (position == null || parent == null || state == null || scoreKey === undefined) return;
 
-function browseInto(mutationId: string | undefined) {
-  const key = activePanel.value?.key;
-  if (!mutationId || key === undefined) return;
-  openDrillDown(mutationId, key);
+  const mutationId = `${parent}${position}${state}`;
+  // A cell with nothing co-occurring would open a browser holding only the singleton the user
+  // just clicked, so it is not a click target. The parent cell lands here too: it carries the
+  // outline but no substitution, so it is never in the browsable set.
+  if (!browsable.value.has(mutationId)) return;
+  openDrillDown(mutationId, scoreKey);
 }
 
 // X = position, Y = state, colour = the single-mutant variant's own score. A cell is NOT a
@@ -204,22 +209,15 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
     :defaultOptions="defaultOptions"
     :defaultPalette="{ categorical: 'triadic' }"
     :readonly-inputs="['x', 'y', 'value']"
+    @cell-click="onCellClick"
   >
-    <!-- One tab per score, plus the temporary way into a drill-down. -->
-    <template #titleLineSlot>
+    <!-- One tab per score, only with something to switch between. -->
+    <template v-if="tabOptions.length > 1" #titleLineSlot>
       <PlTabs
-        v-if="tabOptions.length > 1"
         :model-value="activePanel.key"
         :options="tabOptions"
         :top-line="false"
         @update:model-value="(v: string) => (app.model.data.selectedLandscapeScore = v)"
-      />
-      <PlAutocomplete
-        v-if="browsableOptions.length > 0"
-        :model-value="undefined"
-        label="Browse variants at"
-        :options-search="searchBrowsable"
-        @update:model-value="(v) => browseInto(v as string | undefined)"
       />
     </template>
     <template #settingsSlot>

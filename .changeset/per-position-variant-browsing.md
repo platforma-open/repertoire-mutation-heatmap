@@ -35,7 +35,7 @@ The landscape's tooltip now carries a **Co-occurring variants** count, so a cell
 has anything to browse before the click is spent. It is worth showing for its own sake: it says
 how well a substitution has been explored in combination, which is a fact about the library.
 
-Opening a drill-down is a picker in the landscape header for now. The real affordance is clicking
-the cell, which miplots4 cannot do yet — its heat map wires `onMouseOver` and nothing else, and
-there is no cell-click event to plumb through graph-maker. The picker calls the same handler the
-click will, so only the handler changes when that lands.
+A drill-down is opened by clicking the cell. Only cells with at least one co-occurring variant
+respond — the rest would open a browser holding nothing but the singleton just clicked, so they
+keep the default cursor and do nothing. Needs the graph-maker release that adds the heat map
+`@cell-click` event.
