@@ -280,6 +280,14 @@ wf.body(func(args) {
 	// differs — exactly one row per variant.
 	//
 	// Cells with no covering single-mutant variant are ABSENT, never filled from a fallback.
+	// BISECT, temporary — delete once it has answered.
+	//
+	// Published 1.1.5 runs clean on a library with multi-mutants; this build does not. So the
+	// fault is in the drill-down precalc, which has two halves: the landscape-side outputs
+	// (co-occurrence count, browsable list, mutation->variant link) and the pair map. False
+	// keeps the first half and drops the second, naming the guilty half in one run.
+	PAIR_MAP_ENABLED := false
+
 	scoreRefs := args.scoreRefs
 	mutCountEntries := columns.getColumns("mutationCount")
 	hasLandscape := !is_undefined(scoreRefs) && len(scoreRefs) > 0 &&
@@ -401,6 +409,10 @@ wf.body(func(args) {
 			withColumns(pt.lit(1).alias("carriesMutation")).
 			save("mutationVariantLink.tsv")
 
+		// Read by the per-score loop and the export below; both are guarded on the same flag.
+		drillDownCells := undefined
+
+		if PAIR_MAP_ENABLED {
 		// Partner pair map: for each fixed mutation, the second substitution of every double
 		// mutant carrying it. Self-join over the doubles on variantKey, keeping both directions
 		// so each member of a pair can be the fixed one.
@@ -451,7 +463,7 @@ wf.body(func(args) {
 		// The fixed mutation is drawn too, in its own cell, carrying the singleton's own measured
 		// score — the reference every pair is read against. Concatenated into the same frame so
 		// one value column serves both, and flagged separately below so the chart can outline it.
-		drillDownCells := pt.concat([
+		drillDownCells = pt.concat([
 			pairCells,
 			singleMutCells.select(
 				pt.col("mutationId"),
@@ -476,6 +488,7 @@ wf.body(func(args) {
 			select(pt.col("mutationId"), pt.col("position"), pt.col("state")).
 			withColumns(pt.lit(1).alias("isFixedMutation")).
 			save("drillDownFixedFlag.tsv")
+		}
 
 		// One saved frame per score, NOT one stacked column under a shared `score` axis. A heatmap
 		// chart has exactly one colour scale — miplots4 takes the value extent across all facets
@@ -527,6 +540,7 @@ wf.body(func(args) {
 			// One row per cell, per score. The sort makes `first` deterministic where a library
 			// encodes the same pair under two variant keys.
 			pairFile := "drillDownPairs_" + string(i) + ".tsv"
+			if PAIR_MAP_ENABLED {
 			drillDownCells.
 				join(sDf, { on: "variantKey", how: "inner" }).
 				select(
@@ -545,6 +559,7 @@ wf.body(func(args) {
 					pt.col("variantKey").cast("String").first().alias("variantKey")
 				).
 				save(pairFile)
+			}
 
 			scoreMeta = scoreMeta + [{
 				index: i,
@@ -857,6 +872,7 @@ wf.body(func(args) {
 		outputs.singleMutantHeatmapPf = pframes.exportFrame(lsPf.build())
 
 		// --- Drill-down import + export ---
+		if PAIR_MAP_ENABLED {
 		// Partner map: [mutationId, position, state] -> cellValue, one value column per score.
 		// The chart pins mutationId to the clicked substitution and draws position x state, so
 		// each cell is the partner of a double mutant; the fixed mutation sits in its own cell,
@@ -978,6 +994,7 @@ wf.body(func(args) {
 			ddPf.add("parent/" + k, trace.inject(v.spec), v.data)
 		}
 		outputs.drillDownHeatmapPf = pframes.exportFrame(ddPf.build())
+		}
 
 		// Mutation -> variant membership, [mutationId, variantKey] -> 1, exported on its own.
 		// variantKey sits at axis 0: a linker is matched positionally, and the columns the table
