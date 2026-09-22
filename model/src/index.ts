@@ -1,6 +1,7 @@
 import type { GraphMakerState } from "@milaboratories/graph-maker";
 import type {
   ColumnRecipe,
+  RenderCtx,
   InferOutputsType,
   PColumnSpec,
   PFrameHandle,
@@ -41,6 +42,27 @@ function dedupByLeafId(recipes: ColumnRecipe[]): ColumnRecipe[] {
     seen.add(leaf);
     return true;
   });
+}
+
+/**
+ * The p-columns of one workflow output, or undefined while the block is still computing.
+ *
+ * `getPColumns()` throws two different ways and they must not be treated alike. Mid-run the
+ * resource tree is incomplete and traversal can throw — that is transient and means "not yet".
+ * Once the block is ready-or-error, a throw means the workflow FAILED, and swallowing it makes a
+ * crashed run indistinguishable from a healthy empty one: the output reports ok with no value,
+ * the block shows Done, and the map is simply blank. That cost a day of debugging once already,
+ * so past readiness the error is rethrown and surfaces on the output.
+ */
+function outputPColumns(ctx: RenderCtx<BlockArgs, BlockData>, name: string) {
+  const node = ctx.outputs?.resolve(name);
+  if (node === undefined) return undefined;
+  try {
+    return node.getPColumns();
+  } catch (e) {
+    if (ctx.outputs?.getIsReadyOrError() === false) return undefined;
+    throw e;
+  }
 }
 
 // Profiler spec names used as join keys — must stay byte-identical to the names the profiler emits.
@@ -574,32 +596,19 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   // only the value column it is given. Present only when score columns are selected AND the
   // profiler emitted a mutation count (the workflow emits it conditionally).
   .outputWithStatus("singleMutantHeatmapPf", (ctx): PFrameHandle | undefined => {
-    try {
-      const pCols = ctx.outputs?.resolve("singleMutantHeatmapPf")?.getPColumns();
-      if (pCols === undefined) return undefined;
-      return createPFrameForGraphs(ctx, pCols);
-    } catch {
-      return undefined;
-    }
+    const pCols = outputPColumns(ctx, "singleMutantHeatmapPf");
+    if (pCols === undefined) return undefined;
+    return createPFrameForGraphs(ctx, pCols);
   })
   .output("singleMutantHeatmapPCols", (ctx) => {
-    try {
-      return ctx.outputs?.resolve("singleMutantHeatmapPf")?.getPColumns();
-    } catch {
-      return undefined;
-    }
+    return outputPColumns(ctx, "singleMutantHeatmapPf");
   })
 
   // One chart per score column the last run produced, in the user's score order. Read from the
   // produced columns, not `data.scoreRefs`: while the block is stale the two disagree, and the
   // columns are what is actually on screen.
   .output("landscapePanels", (ctx): LandscapePanel[] | undefined => {
-    let pCols;
-    try {
-      pCols = ctx.outputs?.resolve("singleMutantHeatmapPf")?.getPColumns();
-    } catch {
-      return undefined;
-    }
+    const pCols = outputPColumns(ctx, "singleMutantHeatmapPf");
     if (pCols === undefined) return undefined;
 
     const panels: LandscapePanel[] = [];
@@ -626,41 +635,26 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   // the fixed-cell flag and the two position-keyed tracks. One frame serves every open
   // drill-down — the chart pins `mutationId` to its own substitution.
   .outputWithStatus("drillDownHeatmapPf", (ctx): PFrameHandle | undefined => {
-    try {
-      const pCols = ctx.outputs?.resolve("drillDownHeatmapPf")?.getPColumns();
-      if (pCols === undefined) return undefined;
-      return createPFrameForGraphs(ctx, pCols);
-    } catch {
-      return undefined;
-    }
+    const pCols = outputPColumns(ctx, "drillDownHeatmapPf");
+    if (pCols === undefined) return undefined;
+    return createPFrameForGraphs(ctx, pCols);
   })
   .output("drillDownHeatmapPCols", (ctx) => {
-    try {
-      return ctx.outputs?.resolve("drillDownHeatmapPf")?.getPColumns();
-    } catch {
-      return undefined;
-    }
+    return outputPColumns(ctx, "drillDownHeatmapPf");
   })
 
   // [mutationId] -> co-occurring variant count, present only for substitutions that HAVE a
   // co-occurring variant. The UI enumerates this frame's axis to list what is worth browsing —
   // which is exactly the set of cells a click will be allowed to open.
   .output("browsableMutationsPf", (ctx) => {
-    try {
-      const pCols = ctx.outputs?.resolve("browsableMutationsPf")?.getPColumns();
-      if (pCols === undefined || pCols.length === 0) return undefined;
-      return ctx.createPFrame(pCols);
-    } catch {
-      return undefined;
-    }
+    const pCols = outputPColumns(ctx, "browsableMutationsPf");
+    if (pCols === undefined || pCols.length === 0) return undefined;
+    return ctx.createPFrame(pCols);
   })
   .output("browsableMutationsColId", (ctx) => {
-    try {
-      const pCols = ctx.outputs?.resolve("browsableMutationsPf")?.getPColumns();
-      return pCols?.find((c) => c.spec.name === BROWSABLE_MUTATION)?.id;
-    } catch {
-      return undefined;
-    }
+    return outputPColumns(ctx, "browsableMutationsPf")?.find(
+      (c) => c.spec.name === BROWSABLE_MUTATION,
+    )?.id;
   })
 
   // Table tab: every variant carrying the active drill-down's substitution, at any mutation
@@ -672,12 +666,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     const mutationId = ctx.data.activeDrillDown;
     if (mutationId === undefined) return undefined;
 
-    let linkCols;
-    try {
-      linkCols = ctx.outputs?.resolve("mutationVariantLinkPf")?.getPColumns();
-    } catch {
-      return undefined;
-    }
+    const linkCols = outputPColumns(ctx, "mutationVariantLinkPf");
     const linker = linkCols?.find((c) => c.spec.name === MUTATION_VARIANT_LINK);
     if (linker === undefined) return undefined;
 
@@ -731,20 +720,12 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   // `[round, parentId, position, state] -> log2FC`. Present only when round-frequency
   // inputs are selected (the workflow emits it conditionally).
   .outputWithStatus("compositionHeatmapPf", (ctx): PFrameHandle | undefined => {
-    try {
-      const pCols = ctx.outputs?.resolve("compositionHeatmapPf")?.getPColumns();
-      if (pCols === undefined) return undefined;
-      return createPFrameForGraphs(ctx, pCols);
-    } catch {
-      return undefined;
-    }
+    const pCols = outputPColumns(ctx, "compositionHeatmapPf");
+    if (pCols === undefined) return undefined;
+    return createPFrameForGraphs(ctx, pCols);
   })
   .output("compositionHeatmapPCols", (ctx) => {
-    try {
-      return ctx.outputs?.resolve("compositionHeatmapPf")?.getPColumns();
-    } catch {
-      return undefined;
-    }
+    return outputPColumns(ctx, "compositionHeatmapPf");
   })
 
   .output("isRunning", (ctx) => ctx.outputs?.getIsReadyOrError() === false)
