@@ -171,9 +171,23 @@ wf.body(func(args) {
 	// raised the floor while leaving auto-sizing on. Here the two are equivalent anyway: with
 	// measured volume at zero the formula returns the floor regardless.
 	//
-	// STOPGAP. The number is a guess sized to the libraries seen so far, and a flat request on
-	// k8s is a hard reservation, since requests equal limits there. The durable fix is for the
-	// expansion to stop happening at all: everything drawn is per-(position, residue), and the
+	// Where 24 GiB comes from — pt's own formula, applied by hand to the volume it cannot see:
+	//
+	//     ram = 2 GiB + 6 x size          (:pt.sizing, size = uncompressed input bytes)
+	//
+	// The state matrix is `variants x parentLength` rows: ~118M on a 1.08M variant library at
+	// 110 positions. A row is variantKey (16 chars) + parentId + position + state plus
+	// separators, ~26 B uncompressed, so ~2.9 GiB of input and ~19 GiB by the formula. 24 GiB
+	// carries a quarter over that.
+	//
+	// STOPGAP, for two reasons. The arithmetic above is tied to ONE library — double the
+	// variants or the parent length and the constant is wrong, silently. And a flat request on
+	// k8s is a hard reservation, since requests equal limits there.
+	//
+	// The durable fix is upstream: pt's sizing heuristic is sound, it is the measurement that is
+	// blind, because `f.size()` counts only inputs attached with addFile(). Teach it to count
+	// p-column inputs and this line deletes itself. Failing that, the expansion could stop
+	// happening at all — everything drawn is per-(position, residue), and the
 	// per-(variant, position) matrix is an intermediate that is immediately aggregated away.
 	ptWf := pt.workflow().mem(24 * units.GiB)
 
