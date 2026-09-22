@@ -27,9 +27,14 @@ field; projects made before this simply have none open.
 The workflow precomputes the drill-down for every cell in one run, from data it already had: the
 per-variant mutation cells the landscape derives are reused without the `mutationCount == 1`
 predicate, so mutation membership needs no designator string parsed. Three new outputs — the
-co-occurrence count, the mutation-to-variant linker, and the partner pair map — all bounded by the
-variants actually observed rather than by the size of the grid. A library with no multi-mutants
-produces an empty pair map and costs nothing.
+co-occurrence count, the mutation-to-variant linker, and the partner pair map. A library with no
+multi-mutants produces an empty pair map and costs nothing.
+
+**Bounded to single and double mutants.** Expanding every variant would put the whole state
+matrix — variants x positions, tens of millions of rows on a real library — through the position
+join and the parent diff, which the landscape never paid because it discarded multi-mutants
+before expanding. Triples and beyond are therefore absent from the Table tab; they were never in
+the partner map, which is doubles by definition, so nothing drawn changes.
 
 The landscape's tooltip now carries a **Co-occurring variants** count, so a cell says whether it
 has anything to browse before the click is spent. It is worth showing for its own sake: it says

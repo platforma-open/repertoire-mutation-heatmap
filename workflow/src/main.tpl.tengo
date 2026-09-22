@@ -296,19 +296,30 @@ wf.body(func(args) {
 			filter(pt.col("mutCount").eq(pt.lit(1))).
 			select(pt.col("variantKey"))
 
-		// One row per MUTATION of every variant, whatever its mutation count — the diff against
-		// the per-position parent residue described above, without the single-mutant predicate.
-		// The landscape takes the single-mutant subset of it; the drill-down maps take the rest.
+		// Variants the drill-down is built from: single and double mutants, nothing deeper.
 		//
-		// Row count is the sum of mutation counts across variants. smDf (variants x positions) is
-		// already materialised by this workflow and is strictly larger, so this adds no new
-		// scaling risk — and no designator string is parsed to get here.
+		// This bound is what keeps the feature affordable. Expanding every variant means putting
+		// the WHOLE state matrix — variants x positions, tens of millions of rows on a real
+		// library — through the position join and the parent diff, which is a different scale
+		// class from the landscape, and the landscape never paid it: it discarded multi-mutants
+		// before expanding. Reducing here restores that early cut.
+		//
+		// What is given up: triples and beyond no longer appear in the Table tab. They were never
+		// in the partner map, which is doubles by definition, so the drawn views are unchanged.
+		browsableVariants := mutCounts.
+			filter(pt.col("mutCount").le(pt.lit(2))).
+			select(pt.col("variantKey"))
+
+		// One row per MUTATION of each of those variants — the diff against the per-position
+		// parent residue described above, without the single-mutant predicate. The landscape
+		// takes the single-mutant subset of it; the drill-down maps take the rest.
 		//
 		// `mutationId` is the substitution's designator (`A5C`: parent residue, position, new
 		// residue), and the key everything in the drill-down hangs off. One string axis, so a
 		// chart pins to one mutation with a single equality filter and the UI reuses the same
 		// value as the section label and the query parameter.
 		allMutCells := smDf.
+			join(browsableVariants, { on: "variantKey", how: "inner" }).
 			join(parentResDf, { on: "position", how: "inner" }).
 			filter(pt.col("state").neq(pt.col("parentResidue"))).
 			withColumns(
@@ -349,7 +360,9 @@ wf.body(func(args) {
 		// Left-joined onto the single-mutant cells and null-filled, so a cell the user can see but
 		// cannot drill into reads a definite `0` rather than an absent tooltip line. Cells with no
 		// single mutant at all have no row here and none on the map either.
-		// One row per (mutation, multi-mutant variant carrying it) — the base both counts read.
+		// One row per (mutation, co-occurring variant carrying it) — the base both counts read.
+		// Bounded to doubles by `browsableVariants` above, which is also exactly what the partner
+		// map draws, so the count and the map agree on what "co-occurring" means.
 		coOccurringCells := allMutCells.
 			join(mutCounts, { on: "variantKey", how: "inner" }).
 			filter(pt.col("mutCount").gt(pt.lit(1)))
