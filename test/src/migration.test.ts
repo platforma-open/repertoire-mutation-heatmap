@@ -1,4 +1,8 @@
-import { withParentOnXAxis } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
+import {
+  drillDownHref,
+  makeDrillDownChartState,
+  withParentOnXAxis,
+} from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import { describe, expect, test } from "vitest";
 
 /** Only the parts of a saved chart this migration reads, so the test needs no graph-maker. */
@@ -83,5 +87,31 @@ describe("withParentOnXAxis", () => {
 
     expect(sourcesOf(migrated, "x")).toEqual([POSITION]);
     expect(sourcesOf(migrated, "annotationsX")).toEqual([REGION, PARENT_FLAG]);
+  });
+});
+
+describe("drillDownHref", () => {
+  test("is the route the app registers, with the designator in the query", () => {
+    expect(drillDownHref("A5C")).toBe("/drilldown?m=A5C");
+  });
+
+  test("escapes a designator that would otherwise break the query string", () => {
+    // The gap and stop residues are real states on the Y axis, and `*` and `-` are clickable
+    // cells like any other — so they reach this function.
+    expect(drillDownHref("A5*")).toBe("/drilldown?m=A5*");
+    expect(decodeURIComponent(drillDownHref("A5-").split("=")[1])).toBe("A5-");
+  });
+});
+
+describe("makeDrillDownChartState", () => {
+  test("keeps uncovered cells empty rather than painting them as zeros", () => {
+    // A partner map is sparse by construction: most (position, residue) pairs were never
+    // observed as a double mutant. Treating those as 0 would fill the map with pairs nobody
+    // measured — the same trap the landscape already avoids.
+    expect(makeDrillDownChartState("A5C").layersSettings?.heatmap?.NAValueAs).toBeNull();
+  });
+
+  test("opens without the Settings drawer — the drill-down has nothing to configure", () => {
+    expect(makeDrillDownChartState("A5C").currentTab).toBeNull();
   });
 });

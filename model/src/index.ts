@@ -4,15 +4,21 @@ import type {
   InferOutputsType,
   PColumnSpec,
   PFrameHandle,
+  PlDataTableStateV2,
   PlRef,
   SUniversalPColumnId,
 } from "@platforma-sdk/model";
 import { kind } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.kind";
+// `createPlDataTableV3`'s return type reaches into `Nil` from helpers, and TS cannot name it
+// from here without this — the same re-export every block building a table carries.
+export type * from "@milaboratories/helpers";
 import {
   BlockModelV3,
   ColumnsCollection,
+  DataColumn,
   DataModelBuilder,
   createPFrameForGraphs,
+  createPlDataTableV3,
   extractPObjectId,
 } from "@platforma-sdk/model";
 
@@ -45,6 +51,11 @@ const LANDSCAPE_VALUE = "pl7.app/repertoire/singleMutantValue";
 const LANDSCAPE_SCORE_REF = "pl7.app/repertoire/landscapeScoreRef";
 const LANDSCAPE_SCORE_INDEX = "pl7.app/repertoire/landscapeScoreIndex";
 
+// Drill-down columns. Same byte-identical contract with the workflow as the landscape names.
+const MUTATION_ID_AXIS = "pl7.app/repertoire/mutationId";
+const MUTATION_VARIANT_LINK = "pl7.app/repertoire/mutationVariantLink";
+const BROWSABLE_MUTATION = "pl7.app/repertoire/browsableMutation";
+
 /** One mutation-landscape chart. */
 export type LandscapePanel = {
   /** The score column's own id — the key of this chart's state in `singleMutantHeatmapStates`. */
@@ -54,6 +65,35 @@ export type LandscapePanel = {
   index: number;
   spec: PColumnSpec;
 };
+
+/** One open per-position variant browser, added by browsing into a substitution. */
+export type DrillDown = {
+  /**
+   * The substitution's designator (`A5C`) — the `mutationId` axis value the drill-down data is
+   * pinned to, the section label, and the `?m=` query parameter. One string, so all three agree
+   * without anything being re-derived.
+   */
+  mutationId: string;
+  /**
+   * The score whose map this was opened from, as a key into `singleMutantHeatmapStates`. Carried
+   * so a drill-down never silently changes what it is measuring when the user switches the
+   * landscape's score tab.
+   */
+  scoreKey: string;
+  /** Which tab is on screen. */
+  tab: "table" | "heatmap";
+  heatmapState: GraphMakerState;
+  tableState: PlDataTableStateV2;
+};
+
+/**
+ * The section href of one drill-down. The model builds the section list with it and the UI
+ * navigates with it, so the two cannot drift apart on the encoding — which they would, silently,
+ * the first time a designator needed escaping.
+ */
+export function drillDownHref(mutationId: string): `/drilldown?m=${string}` {
+  return `/drilldown?m=${encodeURIComponent(mutationId)}`;
+}
 
 // Subtitle fallback when no dataset is selected yet.
 const NO_DATASET_LABEL = "No dataset selected";
@@ -103,6 +143,19 @@ export type BlockUiState = {
    * naming a score no longer selected, means the first chart.
    */
   selectedLandscapeScore?: string;
+  /**
+   * Open drill-downs, in the order they were opened — one section each, under the landscape.
+   *
+   * UI state on purpose: it reaches neither `args` nor `prerunArgs`, so browsing into a
+   * substitution never makes the block stale and no Run button appears. The workflow already
+   * precomputed every cell's drill-down, so opening one only filters data the block holds.
+   */
+  drillDowns: DrillDown[];
+  /**
+   * The drill-down whose page is on screen, as a `mutationId`. The model has no route access, so
+   * the page writes this on mount; `drillDownTable` reads it to know which mutation to filter to.
+   */
+  activeDrillDown?: string;
 };
 
 /** Data version `v1`: one faceted landscape chart, so one chart state. */
@@ -113,6 +166,9 @@ export type BlockDataV2 = BlockData;
 
 /** Data version `v3`: the same shape again; `v4` only rewrites chart states. */
 export type BlockDataV3 = BlockData;
+
+/** Data version `v4`: before per-position variant browsing, so no drill-down fields. */
+export type BlockDataV4 = Omit<BlockData, "drillDowns" | "activeDrillDown">;
 
 /** Unified persisted data: workflow-relevant selections + UI view state. */
 export type BlockData = {
@@ -173,6 +229,15 @@ export function makeLandscapeChartState(
       },
     },
   };
+}
+
+/**
+ * Default state for a drill-down's partner map. Same shape as a landscape chart — one colour
+ * scale, no normalization, absent cells left empty — because it is the same map with one
+ * mutation held fixed.
+ */
+export function makeDrillDownChartState(title: string): GraphMakerState {
+  return makeLandscapeChartState(title, null);
 }
 
 /**
@@ -288,8 +353,11 @@ const dataModel = new DataModelBuilder({ kind })
       ]),
     ),
   }))
-  .migrate<BlockData>("v4", (v3) => ({ ...v3, ...mapChartStates(v3, withParentOnXAxis) }))
+  .migrate<BlockDataV4>("v4", (v3) => ({ ...v3, ...mapChartStates(v3, withParentOnXAxis) }))
+  // Additive: a project made before per-position variant browsing simply has none open.
+  .migrate<BlockData>("v5", (v4) => ({ ...v4, drillDowns: [] }))
   .init(() => ({
+    drillDowns: [],
     roundFrequencyRefs: [],
     compositionEpsilon: 1e-6,
     scoreRefs: [],
@@ -552,6 +620,113 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     return panels;
   })
 
+  // --- Drill-down outputs (per-position variant browsing) ---
+
+  // Partner map: [mutationId, position, state] -> cellValue, one value column per score, plus
+  // the fixed-cell flag and the two position-keyed tracks. One frame serves every open
+  // drill-down — the chart pins `mutationId` to its own substitution.
+  .outputWithStatus("drillDownHeatmapPf", (ctx): PFrameHandle | undefined => {
+    try {
+      const pCols = ctx.outputs?.resolve("drillDownHeatmapPf")?.getPColumns();
+      if (pCols === undefined) return undefined;
+      return createPFrameForGraphs(ctx, pCols);
+    } catch {
+      return undefined;
+    }
+  })
+  .output("drillDownHeatmapPCols", (ctx) => {
+    try {
+      return ctx.outputs?.resolve("drillDownHeatmapPf")?.getPColumns();
+    } catch {
+      return undefined;
+    }
+  })
+
+  // [mutationId] -> co-occurring variant count, present only for substitutions that HAVE a
+  // co-occurring variant. The UI enumerates this frame's axis to list what is worth browsing —
+  // which is exactly the set of cells a click will be allowed to open.
+  .output("browsableMutationsPf", (ctx) => {
+    try {
+      const pCols = ctx.outputs?.resolve("browsableMutationsPf")?.getPColumns();
+      if (pCols === undefined || pCols.length === 0) return undefined;
+      return ctx.createPFrame(pCols);
+    } catch {
+      return undefined;
+    }
+  })
+  .output("browsableMutationsColId", (ctx) => {
+    try {
+      const pCols = ctx.outputs?.resolve("browsableMutationsPf")?.getPColumns();
+      return pCols?.find((c) => c.spec.name === BROWSABLE_MUTATION)?.id;
+    } catch {
+      return undefined;
+    }
+  })
+
+  // Table tab: every variant carrying the active drill-down's substitution, at any mutation
+  // count. The block exports only the [variantKey, mutationId] linker as the primary column;
+  // sequence, mutations, mutation count, abundance and the scores are joined in from the result
+  // pool on the shared variantKey axis, so none of them is copied into this block's own exports
+  // and the user can surface any other variant-keyed column later.
+  .outputWithStatus("drillDownTable", (ctx) => {
+    const mutationId = ctx.data.activeDrillDown;
+    if (mutationId === undefined) return undefined;
+
+    let linkCols;
+    try {
+      linkCols = ctx.outputs?.resolve("mutationVariantLinkPf")?.getPColumns();
+    } catch {
+      return undefined;
+    }
+    const linker = linkCols?.find((c) => c.spec.name === MUTATION_VARIANT_LINK);
+    if (linker === undefined) return undefined;
+
+    // Axis order is the workflow's: variantKey at 0 (what the secondaries join on), mutationId
+    // at 1 (what the filter pins).
+    const mutationAxis = linker.spec.axesSpec.find((a) => a.name === MUTATION_ID_AXIS);
+    if (mutationAxis === undefined) return undefined;
+
+    const stateMatrixRef = ctx.data.stateMatrixRef;
+    if (stateMatrixRef === undefined) return undefined;
+    const stateSpec = ctx.resultPool.getPColumnSpecByRef(stateMatrixRef);
+    if (!stateSpec) return undefined;
+
+    // Everything the profiler and the upstream blocks key on variantKey alone: the state matrix
+    // carries that axis, so a zero-hop anchored discovery reaches them directly. Linkers are
+    // excluded — they are the hop, not a column to show.
+    const secondary = dedupByLeafId(
+      ColumnsCollection(["result_pool"])
+        .discover({
+          anchors: { main: stateSpec },
+          mode: "enrichment",
+          maxHops: 0,
+          exclude: [{ annotations: { "pl7.app/isLinkerColumn": exactMatch("true") } }],
+        })
+        .getColumns(),
+    );
+
+    return createPlDataTableV3(ctx, {
+      primaryColumns: [DataColumn.fromColumn(linker)],
+      columns: secondary,
+      // Model-side default, so the table opens already scoped to the browsed substitution
+      // instead of showing the whole membership map for an instant.
+      filters: {
+        type: "and",
+        filters: [
+          {
+            type: "patternEquals",
+            column: {
+              type: "axis",
+              id: { name: mutationAxis.name, type: mutationAxis.type, domain: mutationAxis.domain },
+            },
+            value: mutationId,
+          },
+        ],
+      },
+      tableState: ctx.data.drillDowns.find((d) => d.mutationId === mutationId)?.tableState,
+    });
+  })
+
   // Composition-enrichment heat map: per-round positional log2 fold change
   // `[round, parentId, position, state] -> log2FC`. Present only when round-frequency
   // inputs are selected (the workflow emits it conditionally).
@@ -588,6 +763,16 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     const sections: { type: "link"; href: `/${string}`; label: string }[] = [
       { type: "link", href: "/", label: "Single Mutation Landscape" },
     ];
+    // One per open drill-down, in the order they were opened, directly under the landscape they
+    // were opened from. Read from `data`, so a section appears the moment a substitution is
+    // browsed into — no Run, and nothing goes stale.
+    for (const d of ctx.data.drillDowns ?? []) {
+      sections.push({
+        type: "link",
+        href: drillDownHref(d.mutationId),
+        label: d.mutationId,
+      });
+    }
     // Needs a baseline + at least one comparison round (see workflow's hasComposition).
     if (ctx.data.roundFrequencyRefs.length >= 2) {
       sections.push({ type: "link", href: "/composition", label: "Enrichment Analysis" });

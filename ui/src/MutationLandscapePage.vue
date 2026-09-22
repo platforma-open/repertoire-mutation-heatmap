@@ -2,12 +2,16 @@
 import type { PredefinedGraphOption } from "@milaboratories/graph-maker";
 import { GraphMaker } from "@milaboratories/graph-maker";
 import { makeLandscapeChartState } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
-import { PlTabs } from "@platforma-sdk/ui-vue";
-import { computed, watch } from "vue";
+import { getUniqueSourceValuesWithLabels } from "@platforma-sdk/model";
+import type { PObjectId } from "@platforma-sdk/model";
+import { PlAutocomplete, PlTabs } from "@platforma-sdk/ui-vue";
+import { computed, ref, watch } from "vue";
 import { useApp } from "./app";
+import { useDrillDowns } from "./drillDown";
 import Settings from "./Settings.vue";
 
 const app = useApp();
+const { open: openDrillDown } = useDrillDowns();
 
 // One chart per score: a heatmap chart has a single colour scale, so scores in different units
 // cannot share one.
@@ -76,6 +80,66 @@ const parentAxisOption = computed((): PredefinedGraphOption<"heatmap">[] => {
   return parentCol ? [{ inputName: "x", selectedSource: parentCol.spec }] : [];
 });
 
+// How many multi-mutants carry this substitution, in the tooltip beside the score. The map has
+// one visual channel and the score already owns it, so until miplots4 grows a glyph overlay the
+// hover is the only place this can be said — and it is what tells the user whether browsing into
+// a cell would hold anything before they spend the click. Worth showing for its own sake too: it
+// says how well a substitution has been explored in combination.
+const coOccurrenceOption = computed((): PredefinedGraphOption<"heatmap">[] => {
+  const col = app.model.outputs.singleMutantHeatmapPCols?.find(
+    (p) => p.spec.name === "pl7.app/repertoire/coOccurringVariants",
+  );
+  return col ? [{ inputName: "tooltipContent", selectedSource: col.spec }] : [];
+});
+
+// --- Browsing into a substitution ---
+//
+// TEMPORARY. The real affordance is clicking the cell, which miplots4 cannot do yet: its heatmap
+// wires onMouseOver and nothing else, and there is no cell-click emit to plumb through
+// graph-maker. This picker calls exactly the same `openDrillDown`, so when the click lands it is
+// the handler that changes and this control goes away.
+//
+// The options are the substitutions that HAVE a co-occurring variant — the same set a click will
+// be allowed to open, so the two never disagree about what is browsable.
+const browsableOptions = ref<{ value: string; label: string }[]>([]);
+watch(
+  () => ({
+    pframe: app.model.outputs.browsableMutationsPf,
+    colId: app.model.outputs.browsableMutationsColId,
+  }),
+  async ({ pframe, colId }) => {
+    if (!pframe || !colId) {
+      browsableOptions.value = [];
+      return;
+    }
+    try {
+      const res = await getUniqueSourceValuesWithLabels(pframe, {
+        columnId: colId as PObjectId,
+        axisIdx: 0,
+      });
+      browsableOptions.value = res.values.map((v) => ({ value: v.value, label: v.label }));
+    } catch {
+      browsableOptions.value = [];
+    }
+  },
+  { immediate: true },
+);
+
+// PlAutocomplete searches rather than listing: a deep-mutational-scanning library can carry
+// thousands of browsable substitutions, far past what a dropdown can show.
+async function searchBrowsable(query: string) {
+  const needle = query.trim().toLowerCase();
+  const all = browsableOptions.value;
+  const hits = needle ? all.filter((o) => o.label.toLowerCase().includes(needle)) : all;
+  return hits.slice(0, 50);
+}
+
+function browseInto(mutationId: string | undefined) {
+  const key = activePanel.value?.key;
+  if (!mutationId || key === undefined) return;
+  openDrillDown(mutationId, key);
+}
+
 // X = position, Y = state, colour = the single-mutant variant's own score. A cell is NOT a
 // population marginal — it is one variant's value, so nothing averages over genetic backgrounds.
 //
@@ -93,6 +157,7 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
     ...parentAxisOption.value, // then parent residue, so the label reads "position, parent"
     { inputName: "y", selectedSource: axes[1] }, // state
     { inputName: "tooltipContent", selectedSource: axes[1] }, // show State in the tooltip
+    ...coOccurrenceOption.value,
     ...regionOption.value,
   ];
 
@@ -140,13 +205,21 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
     :defaultPalette="{ categorical: 'triadic' }"
     :readonly-inputs="['x', 'y', 'value']"
   >
-    <!-- One tab per score, only with something to switch between. -->
-    <template v-if="tabOptions.length > 1" #titleLineSlot>
+    <!-- One tab per score, plus the temporary way into a drill-down. -->
+    <template #titleLineSlot>
       <PlTabs
+        v-if="tabOptions.length > 1"
         :model-value="activePanel.key"
         :options="tabOptions"
         :top-line="false"
         @update:model-value="(v: string) => (app.model.data.selectedLandscapeScore = v)"
+      />
+      <PlAutocomplete
+        v-if="browsableOptions.length > 0"
+        :model-value="undefined"
+        label="Browse variants at"
+        :options-search="searchBrowsable"
+        @update:model-value="(v) => browseInto(v as string | undefined)"
       />
     </template>
     <template #settingsSlot>
