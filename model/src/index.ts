@@ -72,6 +72,7 @@ function outputPColumns(ctx: RenderCtx<BlockArgs, BlockData>, name: string) {
 
 // Profiler spec names used as join keys — must stay byte-identical to the names the profiler emits.
 const STATE_MATRIX = "pl7.app/repertoire/stateMatrix";
+const VARIANT_KEY_AXIS = "pl7.app/variantKey";
 
 // One such column per selected score. Must stay byte-identical to the workflow's import spec.
 const LANDSCAPE_VALUE = "pl7.app/repertoire/singleMutantValue";
@@ -724,9 +725,18 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     const stateSpec = ctx.resultPool.getPColumnSpecByRef(stateMatrixRef);
     if (!stateSpec) return undefined;
 
-    // Everything the profiler and the upstream blocks key on variantKey alone: the state matrix
-    // carries that axis, so a zero-hop anchored discovery reaches them directly. Linkers are
+    // Everything the profiler and the upstream blocks key on variantKey ALONE. Linkers are
     // excluded — they are the hop, not a column to show.
+    //
+    // The axis check is what keeps the table honest, and it is not optional. A zero-hop
+    // discovery also reaches columns carrying axes the linker does not: the state matrix is
+    // `[variantKey, parentId, position]` and the region track is `[parentId, position]`.
+    // Joining either adds a position axis, and one variant becomes one row PER POSITION — ~110x,
+    // which turned a few hundred variants into 66,220 rows of the same variant repeated.
+    //
+    // Per-sample columns are excluded by the same rule. They belong in sheets rather than rows;
+    // until that exists, an abundance split by sample is left out rather than multiplying the
+    // table by the sample count.
     const secondary = dedupByLeafId(
       ColumnsCollection(["result_pool"])
         .discover({
@@ -736,7 +746,10 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
           exclude: [{ annotations: { "pl7.app/isLinkerColumn": exactMatch("true") } }],
         })
         .getColumns(),
-    );
+    ).filter((recipe) => {
+      const axes = recipe.getSpec().axesSpec;
+      return axes.length === 1 && axes[0].name === VARIANT_KEY_AXIS;
+    });
 
     return createPlDataTableV3(ctx, {
       primaryColumns: [DataColumn.fromColumn(linker)],
