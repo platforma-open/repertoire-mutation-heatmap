@@ -380,17 +380,16 @@ wf.body(func(args) {
 			agg(pt.col("variantKey").count().alias("coOccurringVariants")).
 			save("browsableMutations.tsv")
 
-		// Collapse to the cell grid FIRST, then attach the count. The other way round sorts one
-		// row per single-mutant variant — millions — only to fold them into the few thousand
-		// cells the map actually has.
-		landscapeCells := singleMutCells.
-			groupBy("position", "state").
-			agg(pt.col("variantKey").count().alias("n")).
-			select(pt.col("position"), pt.col("state"))
-
-		landscapeCells.
+		// Collapse AFTER the join, not before. Folding to the cell grid first and joining the
+		// count onto it reads better and does less work, but ptabler dies on the resulting plan
+		// (see the note above the drill-down cell set) — so this keeps the shape that runs.
+		singleMutCells.
+			select(pt.col("position"), pt.col("state")).
 			join(coOccurrence, { on: ["position", "state"], how: "left" }).
 			withColumns(pt.col("coOccurringVariants").fillNull(pt.lit(0)).alias("coOccurringVariants")).
+			sort(["position", "state"]).
+			groupBy("position", "state").
+			agg(pt.col("coOccurringVariants").first().alias("coOccurringVariants")).
 			save("coOccurringVariants.tsv")
 
 		// Mutation -> variant membership: every variant carrying each substitution, at any
@@ -444,22 +443,13 @@ wf.body(func(args) {
 			)
 		])
 
-		// One row per (mutationId, position, state), chosen once. Which variant represents a cell
-		// does not depend on the score, so this sort — the expensive step — must not sit inside
-		// the per-score loop below, where it would run again for every score the user selected.
-		//
-		// Trade, in the degenerate case only: the representative is picked before the score is
-		// attached, so if a cell is covered by two variant keys and the first carries no value
-		// for some score, that cell is empty on that score's map rather than falling through to
-		// the second variant. One pair of aa mutations normally means one aa variant, so the
-		// case needs a library that encodes the same pair twice.
-		drillDownCellsUnique := drillDownCells.
-			sort(["mutationId", "position", "state", "variantKey"]).
-			groupBy("mutationId", "position", "state").
-			agg(
-				pt.col("partnerMutation").cast("String").first().alias("partnerMutation"),
-				pt.col("variantKey").cast("String").first().alias("variantKey")
-			)
+		// NOTE, do not "optimise" this the obvious way. Picking the representative variant per
+		// cell once, outside the per-score loop, is score-independent and removes N-1 sorts —
+		// but ptabler exits with a signal (code -1, no traceback) on the plan that produces,
+		// even on a few thousand rows. The same happened to the co-occurrence count when its
+		// aggregation was folded ahead of the join. Both are reverted here; whatever the plan
+		// builder dislikes about a shared sort/groupBy node reused by several consumers has to
+		// be understood before this is tried again.
 
 		// [mutationId, position, state] -> 1 on the fixed cell only, so GraphMaker's Highlight
 		// input outlines it as a subset — the same mechanism as the parent-residue mark above.
@@ -515,10 +505,10 @@ wf.body(func(args) {
 			// changes what it is measuring — hence one pair frame per score, keyed the same way
 			// as the landscape's. Same one-row-per-cell guarantee: within a fixed mutation a
 			// partner cell is one double mutant, so `first` IS that variant's value.
-			// The cell set is already one row per cell, so this only attaches the score — no sort
-			// and no aggregation per score.
+			// One row per cell, per score. The sort makes `first` deterministic where a library
+			// encodes the same pair under two variant keys.
 			pairFile := "drillDownPairs_" + string(i) + ".tsv"
-			drillDownCellsUnique.
+			drillDownCells.
 				join(sDf, { on: "variantKey", how: "inner" }).
 				select(
 					pt.col("mutationId"),
@@ -526,7 +516,14 @@ wf.body(func(args) {
 					pt.col("state"),
 					pt.col("partnerMutation"),
 					pt.col("variantKey"),
-					pt.col("scoreValue").cast("Double").alias("cellValue")
+					pt.col("scoreValue").cast("Double").alias("scoreValue")
+				).
+				sort(["mutationId", "position", "state", "variantKey"]).
+				groupBy("mutationId", "position", "state").
+				agg(
+					pt.col("scoreValue").first().alias("cellValue"),
+					pt.col("partnerMutation").cast("String").first().alias("partnerMutation"),
+					pt.col("variantKey").cast("String").first().alias("variantKey")
 				).
 				save(pairFile)
 
