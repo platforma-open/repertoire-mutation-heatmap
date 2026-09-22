@@ -4,7 +4,7 @@ import { GraphMaker } from "@milaboratories/graph-maker";
 import { makeLandscapeChartState } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import { getUniqueSourceValuesWithLabels } from "@platforma-sdk/model";
 import type { PObjectId } from "@platforma-sdk/model";
-import { PlAlert, PlTabs } from "@platforma-sdk/ui-vue";
+import { PlNotificationAlert, PlTabs } from "@platforma-sdk/ui-vue";
 import { computed, ref, watch } from "vue";
 import { useApp } from "./app";
 import { useDrillDowns } from "./drillDown";
@@ -147,6 +147,11 @@ const nothingToBrowse = computed(
   () => landscapeReady.value && browsableLoaded.value && browsable.value.size === 0,
 );
 
+// Dismissed for this view only — deliberately not persisted to `data`: it is a statement about
+// the data currently on screen, so a re-run that changes the answer should say so again.
+const noticeOpen = ref(true);
+watch(nothingToBrowse, () => (noticeOpen.value = true));
+
 function onCellClick(cell: CellClickData) {
   const position = cell.x.find((s) => s.spec?.name === POSITION_AXIS)?.value;
   const parent = cell.x.find((s) => s.spec?.name === PARENT_RESIDUE)?.value;
@@ -218,10 +223,15 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
     setup, so swapping the bound state without remounting would carry the previous score's
     settings over and write them into the new score's state.
   -->
-  <PlAlert v-if="nothingToBrowse" type="warn" icon>
-    No substitution in this dataset appears in a variant carrying more than one mutation, so there
-    are no combinations to browse. Every cell reports "Co-occurring variants 0" and opens nothing.
-  </PlAlert>
+  <!-- Floated over the chart, not stacked above it: the same fixed bottom-right corner and the
+       same component graph-maker uses for its own truncation and export warnings, so the block
+       does not invent a second notification style. A full-width banner also displaced the plot. -->
+  <div v-if="nothingToBrowse" :class="$style.alerts">
+    <PlNotificationAlert v-model="noticeOpen" type="warning" closable>
+      No substitution in this dataset appears in a variant carrying more than one mutation, so there
+      are no combinations to browse.
+    </PlNotificationAlert>
+  </div>
 
   <GraphMaker
     v-if="activePanel"
@@ -265,3 +275,18 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
     </template>
   </GraphMaker>
 </template>
+
+<style module>
+/* Matches graph-maker's own `.alerts` container so the two stack alike. */
+.alerts {
+  position: fixed;
+  bottom: 12px;
+  right: 12px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  width: 256px;
+}
+</style>
