@@ -154,3 +154,16 @@ describe("scoreLabelsByKey", () => {
     expect(labels).toEqual({});
   });
 });
+
+describe("makeDrillDownChartState — empty cells", () => {
+  test("shows empty rows and columns, so the map spans the whole parent", () => {
+    const heatmap = makeDrillDownChartState().layersSettings?.heatmap;
+    expect(heatmap?.showEmptyRows).toBe(true);
+    expect(heatmap?.showEmptyColumns).toBe(true);
+  });
+
+  test("still keeps uncovered cells empty rather than painting them as zeros", () => {
+    // Showing a column and inventing a value in it are different things.
+    expect(makeDrillDownChartState().layersSettings?.heatmap?.NAValueAs).toBeNull();
+  });
+});

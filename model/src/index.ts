@@ -226,6 +226,9 @@ export type BlockDataV4 = Omit<BlockData, "drillDowns" | "activeDrillDown">;
 /** Data version `v5`: drill-downs exist; `v6` only blanks their chart titles. */
 export type BlockDataV5 = BlockData;
 
+/** Data version `v6`: the same shape; `v7` only pins a layer setting on drill-down charts. */
+export type BlockDataV6 = BlockData;
+
 /** Unified persisted data: workflow-relevant selections + UI view state. */
 export type BlockData = {
   // Block label shown as the subtitle. `customBlockLabel` is the user-renamed override;
@@ -292,10 +295,32 @@ export function makeLandscapeChartState(
  * scale, no normalization, absent cells left empty — because it is the same map with one
  * mutation held fixed.
  */
+/**
+ * Pins "show empty rows/columns" on a drill-down chart.
+ *
+ * The partner map is sparse by nature — most positions carry no pair with the fixed mutation —
+ * and without this it draws only the few positions that do. The region band beneath it then
+ * shrinks to those, and the reader loses where in the parent they are looking. With the value
+ * column's axes declared dense, the full grid arrives; this is what makes it render.
+ */
+function withEmptyCellsShown(state: GraphMakerState): GraphMakerState {
+  return {
+    ...state,
+    layersSettings: {
+      ...state.layersSettings,
+      heatmap: {
+        ...state.layersSettings?.heatmap,
+        showEmptyRows: true,
+        showEmptyColumns: true,
+      },
+    },
+  };
+}
+
 export function makeDrillDownChartState(): GraphMakerState {
   // Empty title on purpose. The page header already names the substitution and the score, and
   // graph-maker would print the same thing again directly beneath it.
-  return makeLandscapeChartState("", null);
+  return withEmptyCellsShown(makeLandscapeChartState("", null));
 }
 
 /**
@@ -416,11 +441,22 @@ const dataModel = new DataModelBuilder({ kind })
   .migrate<BlockDataV5>("v5", (v4) => ({ ...v4, drillDowns: [] }))
   // The page header names the drill-down now, so the chart below it must not repeat the name.
   // Charts created before that carry the designator as their own title and would print it twice.
-  .migrate<BlockData>("v6", (v5) => ({
+  .migrate<BlockDataV6>("v6", (v5) => ({
     ...v5,
     drillDowns: v5.drillDowns.map((d) => ({
       ...d,
       heatmapState: { ...d.heatmapState, title: "" },
+    })),
+  }))
+  // graph-maker writes its merged layer settings back into whatever state it is bound to, so a
+  // drill-down chart opened before this keeps the old default of hiding empty rows and columns
+  // and would draw only the positions carrying a pair. Same reason the `v3` migration had to
+  // pin NAValueAs rather than rely on the seed.
+  .migrate<BlockData>("v7", (v6) => ({
+    ...v6,
+    drillDowns: v6.drillDowns.map((d) => ({
+      ...d,
+      heatmapState: withEmptyCellsShown(d.heatmapState),
     })),
   }))
   .init(() => ({

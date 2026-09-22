@@ -69,6 +69,13 @@ wf.prepare(func(args) {
 		name: "pl7.app/repertoire/mutationCount",
 		axes: [{ anchor: "main", idx: 0 }]
 	}, "mutationCount")
+	// Per-variant display label ("V-SYVZR"), keyed on the state matrix's variantKey axis (idx 0).
+	// The pair map's tooltip shows the variant, and a raw key identifies nothing to a reader.
+	// addMulti so a dataset without labels resolves to empty and the key is shown instead.
+	bb.addMulti({
+		name: "pl7.app/label",
+		axes: [{ anchor: "main", idx: 0 }]
+	}, "variantLabel")
 	// Per-variant score columns for the mutation landscape. Same shape as the round
 	// frequencies: ids come from the model's discover() (anchored on `main`), added without a
 	// query key and retrieved by the ref itself in the body.
@@ -537,6 +544,26 @@ wf.body(func(args) {
 
 		drillDownCells := pt.concat([pairCells, fixedOwnCells])
 
+		// Swap the raw variant key for the variant's label where one exists. Left join + fillNull
+		// rather than an inner join: a variant the label column does not cover keeps its key and
+		// stays in the map, instead of vanishing from it.
+		variantLabelEntries := columns.getColumns("variantLabel")
+		if !is_undefined(variantLabelEntries) && len(variantLabelEntries) > 0 {
+			variantLabels := ptWf.frame(pt.p.column("variantLabel", variantLabelEntries[0])).select(
+				pt.axis(VARIANT_KEY_AXIS).alias("variantKey"),
+				pt.col("variantLabel").cast("String").alias("variantLabel")
+			)
+			drillDownCells = drillDownCells.
+				join(variantLabels, { on: "variantKey", how: "left" }).
+				select(
+					pt.col("mutationId"),
+					pt.col("position"),
+					pt.col("state"),
+					pt.col("partnerMutation"),
+					pt.col("variantLabel").fillNull(pt.col("variantKey")).alias("variantKey")
+				)
+		}
+
 		// NOTE, do not "optimise" this the obvious way. Picking the representative variant per
 		// cell once, outside the per-score loop, is score-independent and removes N-1 sorts —
 		// but ptabler exits with a signal (code -1, no traceback) on the plan that produces,
@@ -944,8 +971,13 @@ wf.body(func(args) {
 				{
 					axes: [
 						{ column: "mutationId", spec: mutationIdAxisSpec },
-						{ column: "position", spec: positionAxisSpec },
-						{ column: "state", spec: stateAxisSpecBase }
+						// Dense, like the landscape's: the partner map otherwise spans only the
+						// handful of positions that happen to carry a pair, and the region band
+						// under it shrinks to those, so the reader loses where in the parent they
+						// are looking. Dense makes graph-maker ask for the full position x state
+						// grid, with no value wherever no pair was observed.
+						{ column: "position", spec: densePositionAxisSpec },
+						{ column: "state", spec: denseStateAxisSpec }
 					],
 					columns: [
 						{
