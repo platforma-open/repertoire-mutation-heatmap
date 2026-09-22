@@ -24,6 +24,7 @@ pframes := import("@platforma-sdk/workflow-tengo:pframes")
 pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
 pt := import("@platforma-sdk/workflow-tengo:pt")
 maps := import("@platforma-sdk/workflow-tengo:maps")
+units := import("@platforma-sdk/workflow-tengo:units")
 
 // Join keys must stay byte-identical to the profiler's emitted axis names.
 VARIANT_KEY_AXIS := "pl7.app/variantKey"
@@ -159,12 +160,22 @@ wf.body(func(args) {
 	// `distinctVariants x parentLength` rows, so on a DMS-scale run that round trip
 	// costs tens of GB of scratch and two extra full passes for no gain.
 	//
-	// No .mem()/.cpu(): pt sizes both from input volume when neither is set
-	// (ram = between(2 GiB + 4 x size, 2 GiB, 64 GiB), see workflow-tengo
-	// pt/workflow-run.tpl.tengo). An explicit request suppresses that formula, and
-	// the old fixed 16 GiB neither grew for a large run nor gave memory back on a
-	// small one.
-	ptWf := pt.workflow()
+	// RAM. The auto-sizer measures `f.size()`, which counts only inputs attached with
+	// `addFile()` — and this workflow attaches none, reading every input through
+	// `pt.p.column`. So the measured volume is ZERO and the run receives exactly the floor,
+	// whatever the data actually is. That is why a library profiled at a higher mutation limit
+	// killed the step: the state matrix is `variants x parentLength` rows — ~118M on a 1.08M
+	// variant run — and the request was still the 2 GiB default, the same as for a 2M row one.
+	//
+	// `memFloor`, not `.mem()`: it raises the lower bound and leaves auto-sizing on, so the
+	// request still grows if this workflow ever does attach files.
+	//
+	// STOPGAP. The floor is a guess sized to the libraries seen so far, and with input volume
+	// measuring zero it is in practice a flat pin — which on k8s is a hard reservation, since
+	// requests equal limits there. The durable fix is for the expansion to stop happening at
+	// all: everything drawn is per-(position, residue), and the per-(variant, position) matrix
+	// is an intermediate that is immediately aggregated away.
+	ptWf := pt.workflow().memFloor(24 * units.GiB)
 
 	// Axes come back named by their spec, not by a header a builder assigns, so each
 	// is aliased here to the name the rest of this body already uses. Matching on the
