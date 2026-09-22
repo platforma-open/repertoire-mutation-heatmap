@@ -410,12 +410,31 @@ wf.body(func(args) {
 
 		doubleCells := allMutCells.join(doubleMutants, { on: "variantKey", how: "inner" })
 
-		partnerCells := doubleCells.select(
-			pt.col("variantKey"),
-			pt.col("position").alias("partnerPosition"),
-			pt.col("state").alias("partnerState"),
-			pt.col("mutationId").alias("partnerMutation")
-		)
+		// The partner side is rebuilt from the state matrix rather than projected out of
+		// `doubleCells`, so the two sides of the join below are independent lineages.
+		//
+		// Joining one lazy node to a projection of ITSELF is the only construct in this workflow
+		// that the single-mutant libraries never exercised — with no double mutants that branch
+		// is empty and never really runs — and it is the shape present in every failing run.
+		// Re-deriving costs one more scan of an already-reduced frame; it buys a plain two-input
+		// join over a self-join.
+		partnerCells := smDf.
+			join(doubleMutants, { on: "variantKey", how: "inner" }).
+			join(parentResDf, { on: "position", how: "inner" }).
+			filter(pt.col("state").neq(pt.col("parentResidue"))).
+			withColumns(
+				pt.concatStr([
+					pt.col("parentResidue"),
+					pt.col("position").cast("String"),
+					pt.col("state")
+				]).alias("partnerMutation")
+			).
+			select(
+				pt.col("variantKey"),
+				pt.col("position").alias("partnerPosition"),
+				pt.col("state").alias("partnerState"),
+				pt.col("partnerMutation")
+			)
 
 		pairCells := doubleCells.
 			select(pt.col("variantKey"), pt.col("mutationId")).
