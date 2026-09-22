@@ -55,11 +55,16 @@ function dedupByLeafId(recipes: ColumnRecipe[]): ColumnRecipe[] {
  * so past readiness the error is rethrown and surfaces on the output.
  */
 function outputPColumns(ctx: RenderCtx<BlockArgs, BlockData>, name: string) {
-  const node = ctx.outputs?.resolve(name);
-  if (node === undefined) return undefined;
   try {
+    const node = ctx.outputs?.resolve(name);
+    if (node === undefined) return undefined;
     return node.getPColumns();
   } catch (e) {
+    // Several outputs are emitted conditionally — the composition map only with rounds
+    // selected, the drill-down only with scores. One the workflow chose not to emit is a
+    // MISSING FIELD, not a failure, and has to stay invisible or every block without an
+    // enrichment view reports an error.
+    if (String(e).includes("field not found")) return undefined;
     if (ctx.outputs?.getIsReadyOrError() === false) return undefined;
     throw e;
   }
