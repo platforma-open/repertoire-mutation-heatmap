@@ -544,24 +544,24 @@ wf.body(func(args) {
 
 		drillDownCells := pt.concat([pairCells, fixedOwnCells])
 
-		// Swap the raw variant key for the variant's label where one exists. Left join + fillNull
-		// rather than an inner join: a variant the label column does not cover keeps its key and
-		// stays in the map, instead of vanishing from it.
+		// The variant's display label, carried ALONGSIDE the key rather than replacing it. The
+		// per-score join below keys on `variantKey`, so overwriting it silently matches nothing
+		// and every pair file comes out empty.
+		//
+		// Left join + fillNull rather than an inner join: a variant the label column does not
+		// cover keeps its key as its label and stays in the map, instead of vanishing from it.
 		variantLabelEntries := columns.getColumns("variantLabel")
-		if !is_undefined(variantLabelEntries) && len(variantLabelEntries) > 0 {
+		if is_undefined(variantLabelEntries) || len(variantLabelEntries) == 0 {
+			drillDownCells = drillDownCells.
+				withColumns(pt.col("variantKey").alias("variantLabel"))
+		} else {
 			variantLabels := ptWf.frame(pt.p.column("variantLabel", variantLabelEntries[0])).select(
 				pt.axis(VARIANT_KEY_AXIS).alias("variantKey"),
 				pt.col("variantLabel").cast("String").alias("variantLabel")
 			)
 			drillDownCells = drillDownCells.
 				join(variantLabels, { on: "variantKey", how: "left" }).
-				select(
-					pt.col("mutationId"),
-					pt.col("position"),
-					pt.col("state"),
-					pt.col("partnerMutation"),
-					pt.col("variantLabel").fillNull(pt.col("variantKey")).alias("variantKey")
-				)
+				withColumns(pt.col("variantLabel").fillNull(pt.col("variantKey")).alias("variantLabel"))
 		}
 
 		// NOTE, do not "optimise" this the obvious way. Picking the representative variant per
@@ -637,6 +637,7 @@ wf.body(func(args) {
 					pt.col("state"),
 					pt.col("partnerMutation"),
 					pt.col("variantKey"),
+					pt.col("variantLabel"),
 					pt.col("scoreValue").cast("Double").alias("scoreValue")
 				).
 				sort(["mutationId", "position", "state", "variantKey"]).
@@ -644,7 +645,8 @@ wf.body(func(args) {
 				agg(
 					pt.col("scoreValue").first().alias("cellValue"),
 					pt.col("partnerMutation").cast("String").first().alias("partnerMutation"),
-					pt.col("variantKey").cast("String").first().alias("variantKey")
+					// The label is what the tooltip shows; the key only ever served the join.
+					pt.col("variantLabel").cast("String").first().alias("variantKey")
 				).
 				save(pairFile)
 
