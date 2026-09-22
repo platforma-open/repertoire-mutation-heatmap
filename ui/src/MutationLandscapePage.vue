@@ -135,22 +135,22 @@ watch(
 );
 
 /**
- * True once the map has drawn and not one substitution in it appears inside a multi-mutant.
+ * Why the last click opened nothing, or undefined when the last click was fine.
  *
- * Without this the block looks broken rather than empty: every cell's tooltip reads
- * "Co-occurring variants 0" and every click does nothing, which is correct but indistinguishable
- * from a feature that failed. Gated on `landscapeReady` so it never fires before the first run,
- * when `browsable` is empty only because nothing has been computed yet.
+ * Answered on demand rather than announced up front: a cell that cannot be browsed is a fact
+ * about that substitution, and standing warnings about the whole dataset nag before the user has
+ * asked anything. It also keeps every cell clickable — the ones with nothing to show say so
+ * instead of silently ignoring the click, which is what reads as a broken block.
  */
-const landscapeReady = computed(() => (app.model.outputs.landscapePanels?.length ?? 0) > 0);
-const nothingToBrowse = computed(
-  () => landscapeReady.value && browsableLoaded.value && browsable.value.size === 0,
-);
+const clickNotice = ref<string | undefined>(undefined);
 
-// Dismissed for this view only — deliberately not persisted to `data`: it is a statement about
-// the data currently on screen, so a re-run that changes the answer should say so again.
-const noticeOpen = ref(true);
-watch(nothingToBrowse, () => (noticeOpen.value = true));
+/** `PlNotificationAlert` drives a boolean; closing it clears the message behind it. */
+const noticeOpen = computed({
+  get: () => clickNotice.value !== undefined,
+  set: (open: boolean) => {
+    if (!open) clickNotice.value = undefined;
+  },
+});
 
 function onCellClick(cell: CellClickData) {
   const position = cell.x.find((s) => s.spec?.name === POSITION_AXIS)?.value;
@@ -158,13 +158,25 @@ function onCellClick(cell: CellClickData) {
   // Y is the state axis, and it is the only source bound there.
   const state = cell.y[0]?.value;
   const scoreKey = activePanel.value?.key;
+  // Nothing resolvable to talk about — stay silent rather than invent a reason.
   if (position == null || parent == null || state == null || scoreKey === undefined) return;
 
+  // The outlined cell on every column: the residue the parent already carries, so it names no
+  // substitution at all. Worth saying, because it is the one cell a user is most likely to try.
+  if (state === parent) {
+    clickNotice.value = `${parent}${position} is the parent residue — not a substitution, so there is nothing to browse.`;
+    return;
+  }
+
   const mutationId = `${parent}${position}${state}`;
-  // A cell with nothing co-occurring would open a browser holding only the singleton the user
-  // just clicked, so it is not a click target. The parent cell lands here too: it carries the
-  // outline but no substitution, so it is never in the browsable set.
-  if (!browsable.value.has(mutationId)) return;
+  // Until the enumeration has settled we do not know what is browsable, so claim nothing.
+  if (!browsableLoaded.value) return;
+  if (!browsable.value.has(mutationId)) {
+    clickNotice.value = `${mutationId} is not carried by any variant with more than one mutation, so there are no combinations to browse.`;
+    return;
+  }
+
+  clickNotice.value = undefined;
   openDrillDown(mutationId, scoreKey);
 }
 
@@ -226,10 +238,9 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
   <!-- Floated over the chart, not stacked above it: the same fixed bottom-right corner and the
        same component graph-maker uses for its own truncation and export warnings, so the block
        does not invent a second notification style. A full-width banner also displaced the plot. -->
-  <div v-if="nothingToBrowse" :class="$style.alerts">
+  <div v-if="clickNotice" :class="$style.alerts">
     <PlNotificationAlert v-model="noticeOpen" type="warning" closable>
-      No substitution in this dataset appears in a variant carrying more than one mutation, so there
-      are no combinations to browse.
+      {{ clickNotice }}
     </PlNotificationAlert>
   </div>
 
