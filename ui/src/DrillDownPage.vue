@@ -3,11 +3,13 @@ import type { PredefinedGraphOption } from "@milaboratories/graph-maker";
 import { GraphMaker } from "@milaboratories/graph-maker";
 import {
   PlAgDataTableV2,
+  PlBlockPage,
   PlBtnGhost,
   PlTabs,
   usePlDataTableSettingsV2,
 } from "@platforma-sdk/ui-vue";
 import { computed, watch } from "vue";
+import { drillDownLabel } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import { useApp } from "./app";
 import { useDrillDowns } from "./drillDown";
 
@@ -53,7 +55,10 @@ const valueCol = computed(() => {
   );
 });
 
-const scoreLabel = computed(() => valueCol.value?.spec.annotations?.["pl7.app/label"] ?? "Score");
+/** Same string the section list shows, built by the same function so the two cannot drift. */
+const pageTitle = computed(() =>
+  drillDown.value ? drillDownLabel(drillDown.value) : mutationId.value,
+);
 
 /** Companion columns of the same score — matched on the score index, which is in their domain. */
 function companion(name: string) {
@@ -130,19 +135,21 @@ const fixedOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefined
 </script>
 
 <template>
-  <div v-if="drillDown" class="drill-down">
-    <div class="drill-down__header">
-      <div class="drill-down__title">{{ mutationId }} · {{ scoreLabel }}</div>
+  <!-- PlBlockPage, not a hand-rolled header: it supplies the page title styling every other
+       block page uses, and the body gutters the table needs. The chart wants the full width,
+       so the gutters come off on that tab. -->
+  <PlBlockPage v-if="drillDown" :title="pageTitle" :no-body-gutters="drillDown.tab === 'heatmap'">
+    <template #append>
       <PlTabs
         :model-value="drillDown.tab"
         :options="TABS"
         :top-line="false"
         @update:model-value="(v: string) => (drillDown!.tab = v as 'table' | 'heatmap')"
       />
-      <!-- The block's section list cannot carry a control of its own, so closing lives here —
-           the same place the graph-maker block puts it. -->
-      <PlBtnGhost icon="close" @click="close(mutationId)">Close</PlBtnGhost>
-    </div>
+      <!-- The block's section list cannot carry a control of its own, so closing lives here.
+           Icon only — the cross says it. -->
+      <PlBtnGhost icon="close" @click="close(mutationId)" />
+    </template>
 
     <PlAgDataTableV2
       v-if="drillDown.tab === 'table'"
@@ -155,7 +162,10 @@ const fixedOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefined
 
     <!-- `:key` forces a fresh GraphMaker per substitution: its store is seeded from the state
          object at setup, so swapping the bound state without remounting would carry the previous
-         drill-down's settings over and write them into this one's state. -->
+         drill-down's settings over and write them into this one's state.
+
+         The chart's own title is empty (see makeDrillDownChartState) — the page title above
+         already names the substitution and the score. -->
     <GraphMaker
       v-else
       :key="mutationId"
@@ -170,23 +180,5 @@ const fixedOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefined
         noPframe: { title: 'Run the block to browse variants' },
       }"
     />
-  </div>
+  </PlBlockPage>
 </template>
-
-<style scoped>
-.drill-down {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-.drill-down__header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 12px 24px;
-}
-.drill-down__title {
-  font-weight: 600;
-  margin-right: auto;
-}
-</style>

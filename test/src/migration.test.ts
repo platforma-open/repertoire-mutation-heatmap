@@ -1,5 +1,6 @@
 import {
   drillDownHref,
+  drillDownLabel,
   makeDrillDownChartState,
   withParentOnXAxis,
 } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
@@ -108,10 +109,26 @@ describe("makeDrillDownChartState", () => {
     // A partner map is sparse by construction: most (position, residue) pairs were never
     // observed as a double mutant. Treating those as 0 would fill the map with pairs nobody
     // measured — the same trap the landscape already avoids.
-    expect(makeDrillDownChartState("A5C").layersSettings?.heatmap?.NAValueAs).toBeNull();
+    expect(makeDrillDownChartState().layersSettings?.heatmap?.NAValueAs).toBeNull();
   });
 
   test("opens without the Settings drawer — the drill-down has nothing to configure", () => {
-    expect(makeDrillDownChartState("A5C").currentTab).toBeNull();
+    expect(makeDrillDownChartState().currentTab).toBeNull();
+  });
+
+  test("carries no title of its own — the page header above it already names the chart", () => {
+    expect(makeDrillDownChartState().title).toBe("");
+  });
+});
+
+describe("drillDownLabel", () => {
+  test("names the substitution and the score it is measured on", () => {
+    expect(drillDownLabel({ mutationId: "G9V", scoreLabel: "Bin score (5.5)" })).toBe(
+      "G9V · Bin score (5.5)",
+    );
+  });
+
+  test("falls back to the substitution alone for a drill-down opened before labels were kept", () => {
+    expect(drillDownLabel({ mutationId: "G9V", scoreLabel: undefined })).toBe("G9V");
   });
 });

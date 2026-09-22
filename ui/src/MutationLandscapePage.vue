@@ -157,7 +157,8 @@ function onCellClick(cell: CellClickData) {
   const parent = cell.x.find((s) => s.spec?.name === PARENT_RESIDUE)?.value;
   // Y is the state axis, and it is the only source bound there.
   const state = cell.y[0]?.value;
-  const scoreKey = activePanel.value?.key;
+  const panel = activePanel.value;
+  const scoreKey = panel?.key;
   // Nothing resolvable to talk about — stay silent rather than invent a reason.
   if (position == null || parent == null || state == null || scoreKey === undefined) return;
 
@@ -177,7 +178,7 @@ function onCellClick(cell: CellClickData) {
   }
 
   clickNotice.value = undefined;
-  openDrillDown(mutationId, scoreKey);
+  openDrillDown(mutationId, scoreKey, panel?.label ?? "Score");
 }
 
 // X = position, Y = state, colour = the single-mutant variant's own score. A cell is NOT a

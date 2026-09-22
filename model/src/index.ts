@@ -107,6 +107,12 @@ export type DrillDown = {
    * landscape's score tab.
    */
   scoreKey: string;
+  /**
+   * That score's display label, snapshotted when the drill-down was opened. The section list is
+   * built in the model, which cannot resolve a label from a score id, so it is carried rather
+   * than looked up — the same reason `defaultBlockLabel` is snapshotted for the subtitle.
+   */
+  scoreLabel?: string;
   /** Which tab is on screen. */
   tab: "table" | "heatmap";
   heatmapState: GraphMakerState;
@@ -118,6 +124,10 @@ export type DrillDown = {
  * navigates with it, so the two cannot drift apart on the encoding — which they would, silently,
  * the first time a designator needed escaping.
  */
+export function drillDownLabel(d: Pick<DrillDown, "mutationId" | "scoreLabel">): string {
+  return d.scoreLabel ? `${d.mutationId} · ${d.scoreLabel}` : d.mutationId;
+}
+
 export function drillDownHref(mutationId: string): `/drilldown?m=${string}` {
   return `/drilldown?m=${encodeURIComponent(mutationId)}`;
 }
@@ -263,8 +273,10 @@ export function makeLandscapeChartState(
  * scale, no normalization, absent cells left empty — because it is the same map with one
  * mutation held fixed.
  */
-export function makeDrillDownChartState(title: string): GraphMakerState {
-  return makeLandscapeChartState(title, null);
+export function makeDrillDownChartState(): GraphMakerState {
+  // Empty title on purpose. The page header already names the substitution and the score, and
+  // graph-maker would print the same thing again directly beneath it.
+  return makeLandscapeChartState("", null);
 }
 
 /**
@@ -756,7 +768,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
       sections.push({
         type: "link",
         href: drillDownHref(d.mutationId),
-        label: d.mutationId,
+        label: drillDownLabel(d),
       });
     }
     // Needs a baseline + at least one comparison round (see workflow's hasComposition).
