@@ -202,5 +202,7 @@ const fixedOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefined
   gap: 12px;
   /* Clears the table's teleported controls, which land directly before this slot. */
   margin-left: 24px;
+  /* Pulls the group 10px further right, so the close cross sits where the page edge expects it. */
+  margin-right: -10px;
 }
 </style>

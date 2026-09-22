@@ -1,6 +1,9 @@
 import {
   drillDownHref,
   drillDownLabel,
+  landscapeHref,
+  landscapeLabel,
+  landscapePanelsFrom,
   scoreLabelsByKey,
   makeDrillDownChartState,
   withParentOnXAxis,
@@ -165,5 +168,49 @@ describe("makeDrillDownChartState — empty cells", () => {
   test("still keeps uncovered cells empty rather than painting them as zeros", () => {
     // Showing a column and inventing a value in it are different things.
     expect(makeDrillDownChartState().layersSettings?.heatmap?.NAValueAs).toBeNull();
+  });
+});
+
+describe("landscape pages", () => {
+  test("the href carries the score, so one page serves one score", () => {
+    expect(landscapeHref("s1")).toBe("/?score=s1");
+  });
+
+  test("escapes a score id that would otherwise break the query string", () => {
+    expect(decodeURIComponent(landscapeHref("a&b").split("=")[1])).toBe("a&b");
+  });
+
+  test("the sidebar entry says what it is, since a delimiter cannot", () => {
+    expect(landscapeLabel("Bin score (5.5)")).toBe("Landscape · Bin score (5.5)");
+  });
+});
+
+describe("landscapePanelsFrom", () => {
+  const valueCol = (ref: string, label: string, index: string) => ({
+    spec: {
+      name: "pl7.app/repertoire/singleMutantValue",
+      annotations: {
+        "pl7.app/repertoire/landscapeScoreRef": ref,
+        "pl7.app/repertoire/landscapeScoreIndex": index,
+        "pl7.app/label": label,
+      },
+    },
+  });
+
+  test("keeps the user's score order, not the order columns arrive in", () => {
+    const panels = landscapePanelsFrom([
+      valueCol("s2", "Second", "1"),
+      valueCol("s1", "First", "0"),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ] as any);
+    expect(panels?.map((p) => p.label)).toEqual(["First", "Second"]);
+  });
+
+  test("ignores the tracks riding the same frame", () => {
+    const panels = landscapePanelsFrom([
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { spec: { name: "pl7.app/repertoire/regionAnnotation", annotations: {} } } as any,
+    ]);
+    expect(panels).toEqual([]);
   });
 });

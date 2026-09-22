@@ -4,13 +4,13 @@ import { GraphMaker } from "@milaboratories/graph-maker";
 import { makeLandscapeChartState } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import { getUniqueSourceValuesWithLabels } from "@platforma-sdk/model";
 import type { PObjectId } from "@platforma-sdk/model";
-import { PlNotificationAlert, PlTabs } from "@platforma-sdk/ui-vue";
+import { PlNotificationAlert } from "@platforma-sdk/ui-vue";
 import { computed, ref, watch } from "vue";
 import { useApp } from "./app";
 import { useDrillDowns } from "./drillDown";
 import Settings from "./Settings.vue";
 
-const app = useApp();
+const app = useApp<`/?score=${string}`>();
 const { open: openDrillDown } = useDrillDowns();
 
 // One chart per score: a heatmap chart has a single colour scale, so scores in different units
@@ -22,13 +22,17 @@ const { open: openDrillDown } = useDrillDowns();
 // tooltip lookup are shared the same way.
 const panels = computed(() => app.model.outputs.landscapePanels ?? []);
 
-const tabOptions = computed(() => panels.value.map((p) => ({ value: p.key, label: p.label })));
-
-// Falls back to the first score when nothing is chosen, or the chosen one is gone. Read-only, so
-// a dropped score costs no write to data.
+// Which score this page shows, from the route. Each score is its own section, so the choice
+// lives in the href rather than in `data` — nothing to keep in sync, and a link to one score is
+// a link to one page.
+//
+// Falls back to the first score when the route names none, or names one the last run no longer
+// produced. Read-only, so a dropped score costs no write to data.
 const activePanel = computed(() => {
   const list = panels.value;
-  const chosen = list.find((p) => p.key === app.model.data.selectedLandscapeScore);
+  const wanted = app.queryParams.score;
+  const chosen =
+    wanted === undefined ? undefined : list.find((p) => p.key === decodeURIComponent(wanted));
   return chosen ?? list[0];
 });
 
@@ -218,6 +222,7 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
 
   return options;
 });
+console.log("test");
 </script>
 
 <template>
@@ -255,15 +260,6 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
     :readonly-inputs="['x', 'y', 'value']"
     @cell-click="onCellClick"
   >
-    <!-- One tab per score, only with something to switch between. -->
-    <template v-if="tabOptions.length > 1" #titleLineSlot>
-      <PlTabs
-        :model-value="activePanel.key"
-        :options="tabOptions"
-        :top-line="false"
-        @update:model-value="(v: string) => (app.model.data.selectedLandscapeScore = v)"
-      />
-    </template>
     <template #settingsSlot>
       <Settings />
     </template>

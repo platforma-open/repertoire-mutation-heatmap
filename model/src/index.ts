@@ -130,6 +130,45 @@ export function drillDownLabel(mutationId: string, scoreLabel: string | undefine
   return scoreLabel ? `${mutationId} · ${scoreLabel}` : mutationId;
 }
 
+/**
+ * The landscape charts the last run produced, in the user's score order.
+ *
+ * Shared by the `landscapePanels` output and by `.sections()`, which needs the same list to name
+ * one page per score — two derivations of "which charts exist" would drift the moment one of
+ * them changed.
+ */
+export function landscapePanelsFrom(
+  pCols: { spec: PColumnSpec }[] | undefined,
+): LandscapePanel[] | undefined {
+  if (pCols === undefined) return undefined;
+  const panels: LandscapePanel[] = [];
+  for (const col of pCols) {
+    if (col.spec.name !== LANDSCAPE_VALUE) continue;
+    const key = col.spec.annotations?.[LANDSCAPE_SCORE_REF];
+    // Pre-per-score-charts run: no ref, so no state key. Such a project shows the empty state
+    // until it is re-run.
+    if (key === undefined) continue;
+    panels.push({
+      key,
+      label: col.spec.annotations?.["pl7.app/label"] ?? "Score",
+      index: Number(col.spec.annotations?.[LANDSCAPE_SCORE_INDEX] ?? "0"),
+      spec: col.spec,
+    });
+  }
+  panels.sort((a, b) => a.index - b.index);
+  return panels;
+}
+
+/** The section href of one landscape page. */
+export function landscapeHref(scoreKey: string): `/?score=${string}` {
+  return `/?score=${encodeURIComponent(scoreKey)}`;
+}
+
+/** `Landscape · Bin score (5.5)` — what the sidebar shows for one landscape page. */
+export function landscapeLabel(scoreLabel: string): string {
+  return `Landscape · ${scoreLabel}`;
+}
+
 /** score id -> display label, from the columns the last run produced. */
 export function scoreLabelsByKey(
   pCols: { spec: PColumnSpec }[] | undefined,
@@ -192,8 +231,9 @@ export type BlockUiState = {
    */
   singleMutantHeatmapStates: Record<string, GraphMakerState>;
   /**
-   * Which score's chart is on screen, as a key into `singleMutantHeatmapStates`. Undefined, or
-   * naming a score no longer selected, means the first chart.
+   * @deprecated Each score now has its own page and the route carries the choice, so nothing
+   * reads this. Left in place rather than migrated away: it is one unused optional field, and
+   * dropping it would rewrite every saved project's data for no gain.
    */
   selectedLandscapeScore?: string;
   /**
@@ -688,27 +728,9 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   // One chart per score column the last run produced, in the user's score order. Read from the
   // produced columns, not `data.scoreRefs`: while the block is stale the two disagree, and the
   // columns are what is actually on screen.
-  .output("landscapePanels", (ctx): LandscapePanel[] | undefined => {
-    const pCols = outputPColumns(ctx, "singleMutantHeatmapPf");
-    if (pCols === undefined) return undefined;
-
-    const panels: LandscapePanel[] = [];
-    for (const col of pCols) {
-      if (col.spec.name !== LANDSCAPE_VALUE) continue;
-      const key = col.spec.annotations?.[LANDSCAPE_SCORE_REF];
-      // Pre-per-score-charts run: no ref, so no state key. Such a project shows the empty state
-      // until it is re-run.
-      if (key === undefined) continue;
-      panels.push({
-        key,
-        label: col.spec.annotations?.["pl7.app/label"] ?? "Score",
-        index: Number(col.spec.annotations?.[LANDSCAPE_SCORE_INDEX] ?? "0"),
-        spec: col.spec,
-      });
-    }
-    panels.sort((a, b) => a.index - b.index);
-    return panels;
-  })
+  .output("landscapePanels", (ctx): LandscapePanel[] | undefined =>
+    landscapePanelsFrom(outputPColumns(ctx, "singleMutantHeatmapPf")),
+  )
 
   // --- Drill-down outputs (per-position variant browsing) ---
 
@@ -831,25 +853,47 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   .subtitle((ctx) => ctx.data.customBlockLabel || ctx.data.defaultBlockLabel || NO_DATASET_LABEL)
 
   .sections((ctx) => {
-    // The landscape is unconditional and owns "/". It is the only always-listed section, so
-    // it is what a block with nothing selected yet shows — and the only way to reach Settings
-    // and pick a dataset. Its own empty state asks for the score columns.
-    const sections: { type: "link"; href: `/${string}`; label: string }[] = [
-      { type: "link", href: "/", label: "Single Mutation Landscape" },
-    ];
-    // One per open drill-down, in the order they were opened, directly under the landscape they
-    // were opened from. Read from `data`, so a section appears the moment a substitution is
-    // browsed into — no Run, and nothing goes stale.
-    const scoreLabels = scoreLabelsByKey(outputPColumns(ctx, "singleMutantHeatmapPf"));
-    for (const d of ctx.data.drillDowns ?? []) {
-      sections.push({
-        type: "link",
-        href: drillDownHref(d.mutationId),
-        label: drillDownLabel(d.mutationId, scoreLabels[d.scoreKey]),
-      });
+    const pCols = outputPColumns(ctx, "singleMutantHeatmapPf");
+    const panels = landscapePanelsFrom(pCols) ?? [];
+
+    // A section is one line of text: no subtitle, no indentation, and a delimiter carries no
+    // label. Grouping is therefore the only way to say what a run of entries is, which is why
+    // each group sits between rules and every landscape entry repeats "Landscape".
+    const sections: (
+      | { type: "link"; href: `/${string}`; label: string }
+      | { type: "delimiter" }
+    )[] = [{ type: "delimiter" }];
+
+    if (panels.length === 0) {
+      // Nothing produced yet. "/" is still listed, because it carries the empty state and its
+      // Settings drawer — on a fresh block it is the only way to pick a dataset at all.
+      sections.push({ type: "link", href: "/", label: "Single Mutation Landscape" });
+    } else {
+      // One page per score, rather than one page with a tab per score: a run can select many
+      // scores, and a tab strip stops being navigable long before a section list does.
+      for (const p of panels) {
+        sections.push({ type: "link", href: landscapeHref(p.key), label: landscapeLabel(p.label) });
+      }
     }
+
+    // One per open drill-down, in the order they were opened. Read from `data`, so a section
+    // appears the moment a substitution is browsed into — no Run, and nothing goes stale.
+    const drillDowns = ctx.data.drillDowns ?? [];
+    if (drillDowns.length > 0) {
+      const scoreLabels = scoreLabelsByKey(pCols);
+      sections.push({ type: "delimiter" });
+      for (const d of drillDowns) {
+        sections.push({
+          type: "link",
+          href: drillDownHref(d.mutationId),
+          label: drillDownLabel(d.mutationId, scoreLabels[d.scoreKey]),
+        });
+      }
+    }
+
     // Needs a baseline + at least one comparison round (see workflow's hasComposition).
     if (ctx.data.roundFrequencyRefs.length >= 2) {
+      sections.push({ type: "delimiter" });
       sections.push({ type: "link", href: "/composition", label: "Enrichment Analysis" });
     }
     return sections;
