@@ -107,12 +107,6 @@ export type DrillDown = {
    * landscape's score tab.
    */
   scoreKey: string;
-  /**
-   * That score's display label, snapshotted when the drill-down was opened. The section list is
-   * built in the model, which cannot resolve a label from a score id, so it is carried rather
-   * than looked up — the same reason `defaultBlockLabel` is snapshotted for the subtitle.
-   */
-  scoreLabel?: string;
   /** Which tab is on screen. */
   tab: "table" | "heatmap";
   heatmapState: GraphMakerState;
@@ -124,8 +118,29 @@ export type DrillDown = {
  * navigates with it, so the two cannot drift apart on the encoding — which they would, silently,
  * the first time a designator needed escaping.
  */
-export function drillDownLabel(d: Pick<DrillDown, "mutationId" | "scoreLabel">): string {
-  return d.scoreLabel ? `${d.mutationId} · ${d.scoreLabel}` : d.mutationId;
+/**
+ * `A5C · Bin score (5.5)` — the substitution and the score it is measured on.
+ *
+ * Derived from the produced columns rather than stored on the drill-down: a stored label goes
+ * stale when a score is renamed upstream, and would be missing entirely on any drill-down opened
+ * before it was introduced. Falls back to the bare designator before a run has produced columns.
+ */
+export function drillDownLabel(mutationId: string, scoreLabel: string | undefined): string {
+  return scoreLabel ? `${mutationId} · ${scoreLabel}` : mutationId;
+}
+
+/** score id -> display label, from the columns the last run produced. */
+export function scoreLabelsByKey(
+  pCols: { spec: PColumnSpec }[] | undefined,
+): Record<string, string> {
+  const labels: Record<string, string> = {};
+  for (const col of pCols ?? []) {
+    if (col.spec.name !== LANDSCAPE_VALUE) continue;
+    const key = col.spec.annotations?.[LANDSCAPE_SCORE_REF];
+    const label = col.spec.annotations?.["pl7.app/label"];
+    if (key !== undefined && label !== undefined) labels[key] = label;
+  }
+  return labels;
 }
 
 export function drillDownHref(mutationId: string): `/drilldown?m=${string}` {
@@ -206,6 +221,9 @@ export type BlockDataV3 = BlockData;
 
 /** Data version `v4`: before per-position variant browsing, so no drill-down fields. */
 export type BlockDataV4 = Omit<BlockData, "drillDowns" | "activeDrillDown">;
+
+/** Data version `v5`: drill-downs exist; `v6` only blanks their chart titles. */
+export type BlockDataV5 = BlockData;
 
 /** Unified persisted data: workflow-relevant selections + UI view state. */
 export type BlockData = {
@@ -394,7 +412,16 @@ const dataModel = new DataModelBuilder({ kind })
   }))
   .migrate<BlockDataV4>("v4", (v3) => ({ ...v3, ...mapChartStates(v3, withParentOnXAxis) }))
   // Additive: a project made before per-position variant browsing simply has none open.
-  .migrate<BlockData>("v5", (v4) => ({ ...v4, drillDowns: [] }))
+  .migrate<BlockDataV5>("v5", (v4) => ({ ...v4, drillDowns: [] }))
+  // The page header names the drill-down now, so the chart below it must not repeat the name.
+  // Charts created before that carry the designator as their own title and would print it twice.
+  .migrate<BlockData>("v6", (v5) => ({
+    ...v5,
+    drillDowns: v5.drillDowns.map((d) => ({
+      ...d,
+      heatmapState: { ...d.heatmapState, title: "" },
+    })),
+  }))
   .init(() => ({
     drillDowns: [],
     roundFrequencyRefs: [],
@@ -764,11 +791,12 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     // One per open drill-down, in the order they were opened, directly under the landscape they
     // were opened from. Read from `data`, so a section appears the moment a substitution is
     // browsed into — no Run, and nothing goes stale.
+    const scoreLabels = scoreLabelsByKey(outputPColumns(ctx, "singleMutantHeatmapPf"));
     for (const d of ctx.data.drillDowns ?? []) {
       sections.push({
         type: "link",
         href: drillDownHref(d.mutationId),
-        label: drillDownLabel(d),
+        label: drillDownLabel(d.mutationId, scoreLabels[d.scoreKey]),
       });
     }
     // Needs a baseline + at least one comparison round (see workflow's hasComposition).

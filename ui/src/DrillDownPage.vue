@@ -9,7 +9,10 @@ import {
   usePlDataTableSettingsV2,
 } from "@platforma-sdk/ui-vue";
 import { computed, watch } from "vue";
-import { drillDownLabel } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
+import {
+  drillDownLabel,
+  scoreLabelsByKey,
+} from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import { useApp } from "./app";
 import { useDrillDowns } from "./drillDown";
 
@@ -55,10 +58,15 @@ const valueCol = computed(() => {
   );
 });
 
-/** Same string the section list shows, built by the same function so the two cannot drift. */
-const pageTitle = computed(() =>
-  drillDown.value ? drillDownLabel(drillDown.value) : mutationId.value,
-);
+/** Same string the section list shows, derived the same way so the two cannot drift. */
+const pageTitle = computed(() => {
+  const key = drillDown.value?.scoreKey;
+  const label =
+    key === undefined
+      ? undefined
+      : scoreLabelsByKey(app.model.outputs.singleMutantHeatmapPCols)[key];
+  return drillDownLabel(mutationId.value, label);
+});
 
 /** Companion columns of the same score — matched on the score index, which is in their domain. */
 function companion(name: string) {
@@ -140,15 +148,19 @@ const fixedOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefined
        so the gutters come off on that tab. -->
   <PlBlockPage v-if="drillDown" :title="pageTitle" :no-body-gutters="drillDown.tab === 'heatmap'">
     <template #append>
-      <PlTabs
-        :model-value="drillDown.tab"
-        :options="TABS"
-        :top-line="false"
-        @update:model-value="(v: string) => (drillDown!.tab = v as 'table' | 'heatmap')"
-      />
-      <!-- The block's section list cannot carry a control of its own, so closing lives here.
+      <!-- The table teleports its own controls (Filters, Columns, Export) into this same append
+           area, immediately before this slot, so they would otherwise butt up against the tabs. -->
+      <div :class="$style.appended">
+        <PlTabs
+          :model-value="drillDown.tab"
+          :options="TABS"
+          :top-line="false"
+          @update:model-value="(v: string) => (drillDown!.tab = v as 'table' | 'heatmap')"
+        />
+        <!-- The block's section list cannot carry a control of its own, so closing lives here.
            Icon only — the cross says it. -->
-      <PlBtnGhost icon="close" @click="close(mutationId)" />
+        <PlBtnGhost icon="close" @click="close(mutationId)" />
+      </div>
     </template>
 
     <PlAgDataTableV2
@@ -182,3 +194,13 @@ const fixedOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefined
     />
   </PlBlockPage>
 </template>
+
+<style module>
+.appended {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  /* Clears the table's teleported controls, which land directly before this slot. */
+  margin-left: 24px;
+}
+</style>

@@ -1,6 +1,7 @@
 import {
   drillDownHref,
   drillDownLabel,
+  scoreLabelsByKey,
   makeDrillDownChartState,
   withParentOnXAxis,
 } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
@@ -123,12 +124,33 @@ describe("makeDrillDownChartState", () => {
 
 describe("drillDownLabel", () => {
   test("names the substitution and the score it is measured on", () => {
-    expect(drillDownLabel({ mutationId: "G9V", scoreLabel: "Bin score (5.5)" })).toBe(
-      "G9V · Bin score (5.5)",
-    );
+    expect(drillDownLabel("G9V", "Bin score (5.5)")).toBe("G9V · Bin score (5.5)");
   });
 
-  test("falls back to the substitution alone for a drill-down opened before labels were kept", () => {
-    expect(drillDownLabel({ mutationId: "G9V", scoreLabel: undefined })).toBe("G9V");
+  test("falls back to the substitution alone before a run has produced columns", () => {
+    expect(drillDownLabel("G9V", undefined)).toBe("G9V");
+  });
+});
+
+describe("scoreLabelsByKey", () => {
+  const valueCol = (ref: string, label: string) => ({
+    spec: {
+      name: "pl7.app/repertoire/singleMutantValue",
+      annotations: { "pl7.app/repertoire/landscapeScoreRef": ref, "pl7.app/label": label },
+    },
+  });
+
+  test("maps each score's id to its display label", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const labels = scoreLabelsByKey([valueCol("s1", "Bin score (5.5)")] as any);
+    expect(labels).toEqual({ s1: "Bin score (5.5)" });
+  });
+
+  test("ignores the tracks riding the same frame", () => {
+    const labels = scoreLabelsByKey([
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { spec: { name: "pl7.app/repertoire/parentResidue", annotations: {} } } as any,
+    ]);
+    expect(labels).toEqual({});
   });
 });

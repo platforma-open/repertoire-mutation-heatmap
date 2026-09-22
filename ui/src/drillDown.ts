@@ -21,9 +21,8 @@ export function useDrillDowns() {
    *
    * @param scoreKey the score whose map this was opened from, so the drill-down keeps measuring
    *        what the user was looking at
-   * @param scoreLabel that score's display name, carried so the section can show it
    */
-  function open(mutationId: string, scoreKey: string, scoreLabel: string) {
+  function open(mutationId: string, scoreKey: string) {
     const already = app.model.data.drillDowns.some((d) => d.mutationId === mutationId);
     if (!already) {
       // Replace the array rather than pushing: the model's `.sections()` reads it, and a whole
@@ -33,7 +32,6 @@ export function useDrillDowns() {
         {
           mutationId,
           scoreKey,
-          scoreLabel,
           tab: "heatmap",
           heatmapState: makeDrillDownChartState(),
           tableState: createPlDataTableStateV2(),
