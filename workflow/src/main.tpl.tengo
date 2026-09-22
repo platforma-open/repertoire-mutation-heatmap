@@ -167,15 +167,15 @@ wf.body(func(args) {
 	// killed the step: the state matrix is `variants x parentLength` rows — ~118M on a 1.08M
 	// variant run — and the request was still the 2 GiB default, the same as for a 2M row one.
 	//
-	// `memFloor`, not `.mem()`: it raises the lower bound and leaves auto-sizing on, so the
-	// request still grows if this workflow ever does attach files.
+	// `.mem()` because the pinned workflow-tengo (6.9.0) has no `memFloor`, which would have
+	// raised the floor while leaving auto-sizing on. Here the two are equivalent anyway: with
+	// measured volume at zero the formula returns the floor regardless.
 	//
-	// STOPGAP. The floor is a guess sized to the libraries seen so far, and with input volume
-	// measuring zero it is in practice a flat pin — which on k8s is a hard reservation, since
-	// requests equal limits there. The durable fix is for the expansion to stop happening at
-	// all: everything drawn is per-(position, residue), and the per-(variant, position) matrix
-	// is an intermediate that is immediately aggregated away.
-	ptWf := pt.workflow().memFloor(24 * units.GiB)
+	// STOPGAP. The number is a guess sized to the libraries seen so far, and a flat request on
+	// k8s is a hard reservation, since requests equal limits there. The durable fix is for the
+	// expansion to stop happening at all: everything drawn is per-(position, residue), and the
+	// per-(variant, position) matrix is an intermediate that is immediately aggregated away.
+	ptWf := pt.workflow().mem(24 * units.GiB)
 
 	// Axes come back named by their spec, not by a header a builder assigns, so each
 	// is aliased here to the name the rest of this body already uses. Matching on the
@@ -307,21 +307,7 @@ wf.body(func(args) {
 			filter(pt.col("mutCount").eq(pt.lit(1))).
 			select(pt.col("variantKey"))
 
-		// Variants the drill-down is built from: single and double mutants, nothing deeper.
-		//
-		// This bound is what keeps the feature affordable. Expanding every variant means putting
-		// the WHOLE state matrix — variants x positions, tens of millions of rows on a real
-		// library — through the position join and the parent diff, which is a different scale
-		// class from the landscape, and the landscape never paid it: it discarded multi-mutants
-		// before expanding. Reducing here restores that early cut.
-		//
-		// What is given up: triples and beyond no longer appear in the Table tab. They were never
-		// in the partner map, which is doubles by definition, so the drawn views are unchanged.
-		browsableVariants := mutCounts.
-			filter(pt.col("mutCount").le(pt.lit(2))).
-			select(pt.col("variantKey"))
-
-		// One row per MUTATION of each of those variants — the diff against the per-position
+		// One row per MUTATION of EVERY variant — the diff against the per-position
 		// parent residue described above, without the single-mutant predicate. The landscape
 		// takes the single-mutant subset of it; the drill-down maps take the rest.
 		//
@@ -329,8 +315,16 @@ wf.body(func(args) {
 		// residue), and the key everything in the drill-down hangs off. One string axis, so a
 		// chart pins to one mutation with a single equality filter and the UI reuses the same
 		// value as the section label and the query parameter.
+		// No mutation-count bound. One was carried for a while on the theory that expanding every
+		// variant is what killed the step; it was not. The step was dying because the RAM request
+		// measured zero (see the pt.workflow comment above) and always came back at the 2 GiB
+		// floor — at limit 1 as much as at limit 3. With that fixed the bound only cost spec
+		// fidelity: triples and beyond belong in the Table tab, and a co-occurring variant is any
+		// variant with more than one mutation, not only a double.
+		//
+		// The row count here is the sum of mutation counts across variants, which stays far below
+		// the `variants x positions` matrix this reads from.
 		allMutCells := smDf.
-			join(browsableVariants, { on: "variantKey", how: "inner" }).
 			join(parentResDf, { on: "position", how: "inner" }).
 			filter(pt.col("state").neq(pt.col("parentResidue"))).
 			withColumns(
@@ -372,8 +366,8 @@ wf.body(func(args) {
 		// cannot drill into reads a definite `0` rather than an absent tooltip line. Cells with no
 		// single mutant at all have no row here and none on the map either.
 		// One row per (mutation, co-occurring variant carrying it) — the base both counts read.
-		// Bounded to doubles by `browsableVariants` above, which is also exactly what the partner
-		// map draws, so the count and the map agree on what "co-occurring" means.
+		// Any mutation count above one, so a substitution carried only by triples still counts as
+		// browsable and still opens a table, even though the partner map draws doubles alone.
 		coOccurringCells := allMutCells.
 			join(mutCounts, { on: "variantKey", how: "inner" }).
 			filter(pt.col("mutCount").gt(pt.lit(1)))
