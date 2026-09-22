@@ -25,6 +25,7 @@ pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
 pt := import("@platforma-sdk/workflow-tengo:pt")
 maps := import("@platforma-sdk/workflow-tengo:maps")
 units := import("@platforma-sdk/workflow-tengo:units")
+pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
 
 // Join keys must stay byte-identical to the profiler's emitted axis names.
 VARIANT_KEY_AXIS := "pl7.app/variantKey"
@@ -89,6 +90,56 @@ wf.prepare(func(args) {
 		columns: bb.build()
 	}
 })
+
+/**
+ * Exact row count of a parquet-partitioned p-column, or undefined when it cannot be known.
+ *
+ * Each part is a ParquetChunk resource whose own JSON carries `stats.numberOfRows`, so this
+ * reads metadata only — no parquet file is opened. Every other storage shape (Json, Binary,
+ * their partitioned forms) keeps per-part counts inside opaque blobs and returns undefined,
+ * as does any chunk whose stats are missing: a partial sum would under-request memory, which
+ * is the failure this exists to prevent.
+ */
+parquetRowCount := func(dataRes) {
+	if is_undefined(dataRes) {
+		return undefined
+	}
+	info := dataRes.info()
+	if is_undefined(info) || is_undefined(info.Type) ||
+		info.Type.Name != pConstants.RTYPE_P_COLUMN_DATA_PARQUET_PARTITIONED.Name {
+		return undefined
+	}
+	total := 0
+	for _, fld in dataRes.inputs() {
+		if !fld.isValueSet() {
+			return undefined
+		}
+		meta := fld.getValue().getDataAsJson()
+		if is_undefined(meta) || is_undefined(meta.stats) {
+			return undefined
+		}
+		rows := meta.stats.numberOfRows
+		if !is_int(rows) && !is_float(rows) {
+			return undefined
+		}
+		total += int(rows)
+	}
+	return total
+}
+
+// pt's own RAM formula (:pt.sizing), applied by hand to a volume pt cannot measure. Clamped to
+// the same 2 GiB floor and 256 GiB ceiling the auto-sizer uses, so this can only ever ask for
+// what the formula would have asked had the input been visible to it.
+ptRamFor := func(sizeBytes) {
+	ram := 2 * units.GiB + 6 * sizeBytes
+	if ram < 2 * units.GiB {
+		ram = 2 * units.GiB
+	}
+	if ram > 256 * units.GiB {
+		ram = 256 * units.GiB
+	}
+	return ram
+}
 
 wf.body(func(args) {
 	// No early bail-out on a missing value source: every view here is optional and guarded on
@@ -160,36 +211,37 @@ wf.body(func(args) {
 	// `distinctVariants x parentLength` rows, so on a DMS-scale run that round trip
 	// costs tens of GB of scratch and two extra full passes for no gain.
 	//
-	// RAM. The auto-sizer measures `f.size()`, which counts only inputs attached with
-	// `addFile()` — and this workflow attaches none, reading every input through
-	// `pt.p.column`. So the measured volume is ZERO and the run receives exactly the floor,
-	// whatever the data actually is. That is why a library profiled at a higher mutation limit
-	// killed the step: the state matrix is `variants x parentLength` rows — ~118M on a 1.08M
-	// variant run — and the request was still the 2 GiB default, the same as for a 2M row one.
+	// RAM, sized from the state matrix's real row count.
 	//
-	// `.mem()` because the pinned workflow-tengo (6.9.0) has no `memFloor`, which would have
-	// raised the floor while leaving auto-sizing on. Here the two are equivalent anyway: with
-	// measured volume at zero the formula returns the floor regardless.
+	// pt sizes a run from `f.size()`, which counts only inputs attached with `addFile()`. This
+	// workflow attaches none — every input is read through `pt.p.column` — so the measured volume
+	// is ZERO and the run receives exactly the 2 GiB floor, whatever the data. That is not a
+	// small error: the state matrix is `variants x parentLength` rows, ~118M on a 1.08M variant
+	// library, and it asked for the same 2 GiB as a 2M row one. It killed the step, and it killed
+	// it for this block before per-position browsing existed too.
 	//
-	// Where 24 GiB comes from — pt's own formula, applied by hand to the volume it cannot see:
+	// The volume pt cannot see is recoverable here. A parquet-partitioned p-column keeps one
+	// ParquetChunk resource per part, each carrying `stats.numberOfRows` in its own JSON — no
+	// parquet file is read to get it. Summing those gives the exact row count, and pt's own
+	// formula turns it into a request:
 	//
-	//     ram = 2 GiB + 6 x size          (:pt.sizing, size = uncompressed input bytes)
+	//     ram = 2 GiB + 6 x size     (:pt.sizing, size = uncompressed input bytes)
 	//
-	// The state matrix is `variants x parentLength` rows: ~118M on a 1.08M variant library at
-	// 110 positions. A row is variantKey (16 chars) + parentId + position + state plus
-	// separators, ~26 B uncompressed, so ~2.9 GiB of input and ~19 GiB by the formula. 24 GiB
-	// carries a quarter over that.
-	//
-	// STOPGAP, for two reasons. The arithmetic above is tied to ONE library — double the
-	// variants or the parent length and the constant is wrong, silently. And a flat request on
-	// k8s is a hard reservation, since requests equal limits there.
-	//
-	// The durable fix is upstream: pt's sizing heuristic is sound, it is the measurement that is
-	// blind, because `f.size()` counts only inputs attached with addFile(). Teach it to count
-	// p-column inputs and this line deletes itself. Failing that, the expansion could stop
-	// happening at all — everything drawn is per-(position, residue), and the
-	// per-(variant, position) matrix is an intermediate that is immediately aggregated away.
-	ptWf := pt.workflow().mem(24 * units.GiB)
+	// Bytes per row is the one estimate left, and it is the stable half: a row is variantKey,
+	// parentId, position and state, ~26 B of text, and that barely moves between libraries. The
+	// row count is what swings — 50x between mutation limit 1 and 3 on the same data — and that
+	// is now measured rather than guessed.
+	STATE_MATRIX_BYTES_PER_ROW := 32
+	stateMatrixRows := parquetRowCount(stateCol.data)
+
+	ptWf := undefined
+	if is_undefined(stateMatrixRows) {
+		// Not parquet-partitioned, or a chunk without stats. Fall back to a flat request rather
+		// than to the 2 GiB floor, which is the value that fails.
+		ptWf = pt.workflow().mem(24 * units.GiB)
+	} else {
+		ptWf = pt.workflow().mem(ptRamFor(stateMatrixRows * STATE_MATRIX_BYTES_PER_ROW))
+	}
 
 	// Axes come back named by their spec, not by a header a builder assigns, so each
 	// is aliased here to the name the rest of this body already uses. Matching on the
