@@ -1,9 +1,7 @@
 import {
   drillDownHref,
   landscapeHref,
-  makeDrillDownChartState,
 } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
-import { createPlDataTableStateV2 } from "@platforma-sdk/model";
 import { useApp } from "./app";
 
 /**
@@ -30,13 +28,9 @@ export function useDrillDowns() {
       // new value is what makes that recompute.
       app.model.data.drillDowns = [
         ...app.model.data.drillDowns,
-        {
-          mutationId,
-          scoreKey,
-          tab: "heatmap",
-          heatmapState: makeDrillDownChartState(),
-          tableState: createPlDataTableStateV2(),
-        },
+        // No chart or table state per entry: one of each is shared across drill-downs, so an
+        // open costs ~100 bytes of block data rather than ~11 KB.
+        { mutationId, scoreKey, tab: "heatmap" },
       ];
     }
     app.navigateTo(drillDownHref(mutationId));

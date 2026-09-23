@@ -165,23 +165,24 @@ const fixedOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefined
 
     <PlAgDataTableV2
       v-if="drillDown.tab === 'table'"
-      v-model="drillDown.tableState"
+      v-model="app.model.data.drillDownTableState"
       :settings="tableSettings"
       show-export-button
       :not-ready-text="'Select score columns in Settings, then Run'"
       :no-rows-text="`No variants carry ${mutationId}`"
     />
 
-    <!-- `:key` forces a fresh GraphMaker per substitution: its store is seeded from the state
-         object at setup, so swapping the bound state without remounting would carry the previous
-         drill-down's settings over and write them into this one's state.
+    <!-- `:key` remounts per substitution so the new `fixedOptions` pin is applied from setup.
+         Carrying settings across is no longer a concern — every drill-down binds the SAME state
+         object, deliberately, because they are the same chart with a different mutation pinned
+         and a state each cost ~11 KB of block data on every write.
 
          The chart's own title is empty (see makeDrillDownChartState) — the page title above
          already names the substitution and the score. -->
     <GraphMaker
       v-else
       :key="mutationId"
-      v-model="drillDown.heatmapState"
+      v-model="app.model.data.drillDownChartState"
       chartType="heatmap"
       :p-frame="app.model.outputs.drillDownHeatmapPf"
       :defaultOptions="defaultOptions"

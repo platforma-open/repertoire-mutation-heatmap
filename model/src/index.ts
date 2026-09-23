@@ -16,6 +16,7 @@ export type * from "@milaboratories/helpers";
 import {
   BlockModelV3,
   ColumnsCollection,
+  createPlDataTableStateV2,
   DataColumn,
   DataModelBuilder,
   createPFrameForGraphs,
@@ -110,8 +111,6 @@ export type DrillDown = {
   scoreKey: string;
   /** Which tab is on screen. */
   tab: "table" | "heatmap";
-  heatmapState: GraphMakerState;
-  tableState: PlDataTableStateV2;
 };
 
 /**
@@ -249,25 +248,55 @@ export type BlockUiState = {
    * the page writes this on mount; `drillDownTable` reads it to know which mutation to filter to.
    */
   activeDrillDown?: string;
+  /**
+   * Chart and table settings for the drill-down pages — ONE of each, shared by all of them.
+   *
+   * Every ui-state write ships the whole of `data` to the backend, and a per-drill-down
+   * `GraphMakerState` plus `PlDataTableStateV2` is ~11 KB each. Four open drill-downs made
+   * `data` 67 KB, and every open, close and tab switch paid to send all of it — measured at
+   * 2.3-4.6 s against a remote backend, versus 123 ms for a write that carries only navigation.
+   *
+   * Sharing is sound here rather than merely cheap: every drill-down draws the same chart with a
+   * different mutation pinned, and the pin travels in `fixedOptions`, which is never persisted.
+   * The table state is keyed internally by `sourceId`, so it already caches per mutation.
+   *
+   * The cost: settings changed on one drill-down apply to all of them.
+   */
+  drillDownChartState: GraphMakerState;
+  drillDownTableState: PlDataTableStateV2;
 };
 
 /** Data version `v1`: one faceted landscape chart, so one chart state. */
-export type BlockDataV1 = Omit<BlockData, "singleMutantHeatmapStates" | "selectedLandscapeScore">;
+export type BlockDataV1 = Omit<BlockDataV4, "singleMutantHeatmapStates" | "selectedLandscapeScore">;
 
 /** Data version `v2`: today's shape. `v3` rewrites values inside it, and adds no field. */
-export type BlockDataV2 = BlockData;
+export type BlockDataV2 = BlockDataV4;
 
 /** Data version `v3`: the same shape again; `v4` only rewrites chart states. */
-export type BlockDataV3 = BlockData;
+export type BlockDataV3 = BlockDataV4;
 
 /** Data version `v4`: before per-position variant browsing, so no drill-down fields. */
-export type BlockDataV4 = Omit<BlockData, "drillDowns" | "activeDrillDown">;
+export type BlockDataV4 = Omit<
+  BlockDataV7,
+  "drillDowns" | "activeDrillDown" | "drillDownChartState" | "drillDownTableState"
+>;
 
 /** Data version `v5`: drill-downs exist; `v6` only blanks their chart titles. */
-export type BlockDataV5 = BlockData;
+export type BlockDataV5 = BlockDataV7;
 
 /** Data version `v6`: the same shape; `v7` only pins a layer setting on drill-down charts. */
-export type BlockDataV6 = BlockData;
+export type BlockDataV6 = BlockDataV7;
+
+/** Data version `v7`: every drill-down carried its own chart and table state. */
+export type BlockDataV7 = Omit<
+  BlockData,
+  "drillDowns" | "drillDownChartState" | "drillDownTableState"
+> & {
+  drillDowns: (DrillDown & {
+    heatmapState: GraphMakerState;
+    tableState: PlDataTableStateV2;
+  })[];
+};
 
 /** Unified persisted data: workflow-relevant selections + UI view state. */
 export type BlockData = {
@@ -446,13 +475,15 @@ export function withParentOnXAxis(state: GraphMakerState): GraphMakerState {
 }
 
 /** Applies a rewrite to every chart state the block keeps. */
-function mapChartStates(
-  data: BlockData,
-  rewrite: (state: GraphMakerState) => GraphMakerState,
-): Pick<
+type ChartStates = Pick<
   BlockData,
   "compositionHeatmapState" | "singleMutantHeatmapState" | "singleMutantHeatmapStates"
-> {
+>;
+
+function mapChartStates(
+  data: ChartStates,
+  rewrite: (state: GraphMakerState) => GraphMakerState,
+): ChartStates {
   return {
     compositionHeatmapState: rewrite(data.compositionHeatmapState),
     singleMutantHeatmapState: rewrite(data.singleMutantHeatmapState),
@@ -492,15 +523,33 @@ const dataModel = new DataModelBuilder({ kind })
   // drill-down chart opened before this keeps the old default of hiding empty rows and columns
   // and would draw only the positions carrying a pair. Same reason the `v3` migration had to
   // pin NAValueAs rather than rely on the seed.
-  .migrate<BlockData>("v7", (v6) => ({
+  .migrate<BlockDataV7>("v7", (v6) => ({
     ...v6,
     drillDowns: v6.drillDowns.map((d) => ({
       ...d,
       heatmapState: withEmptyCellsShown(d.heatmapState),
     })),
   }))
+  // Collapse the per-drill-down chart and table states onto one of each. The first drill-down's
+  // settings win — they are all the same chart, so any of them is as good, and taking one keeps
+  // whatever the user had adjusted rather than resetting to defaults.
+  .migrate<BlockData>("v8", (v7) => {
+    const first = v7.drillDowns[0];
+    return {
+      ...v7,
+      drillDownChartState: first?.heatmapState ?? makeDrillDownChartState(),
+      drillDownTableState: first?.tableState ?? createPlDataTableStateV2(),
+      drillDowns: v7.drillDowns.map(({ mutationId, scoreKey, tab }) => ({
+        mutationId,
+        scoreKey,
+        tab,
+      })),
+    };
+  })
   .init(() => ({
     drillDowns: [],
+    drillDownChartState: makeDrillDownChartState(),
+    drillDownTableState: createPlDataTableStateV2(),
     roundFrequencyRefs: [],
     compositionEpsilon: 1e-6,
     scoreRefs: [],
@@ -827,7 +876,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
           },
         ],
       },
-      tableState: ctx.data.drillDowns.find((d) => d.mutationId === mutationId)?.tableState,
+      tableState: ctx.data.drillDownTableState,
     });
   })
 
