@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import type { CellClickData, PredefinedGraphOption } from "@milaboratories/graph-maker";
 import { GraphMaker } from "@milaboratories/graph-maker";
-import { makeLandscapeChartState } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
+import {
+  landscapeHref,
+  makeLandscapeChartState,
+} from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import { getUniqueSourceValuesWithLabels } from "@platforma-sdk/model";
 import type { PObjectId } from "@platforma-sdk/model";
 import { PlNotificationAlert } from "@platforma-sdk/ui-vue";
@@ -35,6 +38,25 @@ const activePanel = computed(() => {
     wanted === undefined ? undefined : list.find((p) => p.key === decodeURIComponent(wanted));
   return chosen ?? list[0];
 });
+
+// Land on a real landscape page whenever the route is not already on one.
+//
+// Two ways to end up adrift, both of which left nothing selected in the sidebar. A fresh block
+// sits on "/" — the placeholder page — and the first run replaces that single section with one
+// per score, so "/" stops being listed. And a route naming a score the latest run no longer
+// produced points at a section that is equally gone. In both cases the chart below still
+// rendered, via the fallback in `activePanel`, while the sidebar showed no selection at all.
+watch(
+  [panels, () => app.queryParams.score],
+  ([list, wanted]) => {
+    if (list.length === 0) return;
+    const onAListedPage =
+      wanted !== undefined && list.some((p) => p.key === decodeURIComponent(wanted));
+    if (onAListedPage) return;
+    app.navigateTo(landscapeHref(list[0].key));
+  },
+  { immediate: true },
+);
 
 // Seed a chart's saved settings the first time it appears, so `v-model` has something to bind.
 // Not a hairpin: the states reach neither args nor any output, and two clients racing here write
@@ -222,7 +244,7 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
 
   return options;
 });
-console.log("test");
+console.log("test2 3");
 </script>
 
 <template>

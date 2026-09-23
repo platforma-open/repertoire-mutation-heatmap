@@ -1,5 +1,6 @@
 import {
   drillDownHref,
+  landscapeHref,
   makeDrillDownChartState,
 } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import { createPlDataTableStateV2 } from "@platforma-sdk/model";
@@ -49,7 +50,15 @@ export function useDrillDowns() {
       app.model.data.activeDrillDown = undefined;
     }
     const last = remaining[remaining.length - 1];
-    app.navigateTo(last ? drillDownHref(last.mutationId) : "/");
+    if (last) {
+      app.navigateTo(drillDownHref(last.mutationId));
+      return;
+    }
+    // No drill-downs left, so fall back to a landscape page. Not to "/": once a run has produced
+    // scores, every landscape page is `/?score=...` and "/" is not a listed section at all, so
+    // leaving on it selects nothing in the sidebar. "/" is only right before the first run.
+    const panels = app.model.outputs.landscapePanels ?? [];
+    app.navigateTo(panels.length > 0 ? landscapeHref(panels[0].key) : "/");
   }
 
   return { open, close };
