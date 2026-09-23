@@ -40,13 +40,23 @@ export function useDrillDowns() {
   function close(mutationId: string) {
     const remaining = app.model.data.drillDowns.filter((d) => d.mutationId !== mutationId);
     app.model.data.drillDowns = remaining;
-    if (app.model.data.activeDrillDown === mutationId) {
-      app.model.data.activeDrillDown = undefined;
-    }
     const last = remaining[remaining.length - 1];
     if (last) {
+      // Hand the model straight to the substitution we are switching to. Blanking it first
+      // costs a visible round trip: `drillDownTable` reads `activeDrillDown` directly, so an
+      // undefined one is a settled `undefined` — the table drops to its not-ready state
+      // ("Select score columns in Settings, then Run"), throws away its columns and data
+      // source, and has to rebuild from nothing once the route lands and the page writes the
+      // new id back.
+      if (app.model.data.activeDrillDown === mutationId) {
+        app.model.data.activeDrillDown = last.mutationId;
+      }
       app.navigateTo(drillDownHref(last.mutationId));
       return;
+    }
+    // Nothing left to show, so the model genuinely has no active substitution.
+    if (app.model.data.activeDrillDown === mutationId) {
+      app.model.data.activeDrillDown = undefined;
     }
     // No drill-downs left, so fall back to a landscape page. Not to "/": once a run has produced
     // scores, every landscape page is `/?score=...` and "/" is not a listed section at all, so
