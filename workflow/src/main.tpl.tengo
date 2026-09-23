@@ -24,6 +24,7 @@ pframes := import("@platforma-sdk/workflow-tengo:pframes")
 pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
 pt := import("@platforma-sdk/workflow-tengo:pt")
 maps := import("@platforma-sdk/workflow-tengo:maps")
+json := import("json")
 units := import("@platforma-sdk/workflow-tengo:units")
 pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
 
@@ -790,7 +791,29 @@ wf.body(func(args) {
 						name: "pl7.app/repertoire/regionAnnotation",
 						valueType: "String",
 						annotations: {
-							"pl7.app/label": "Region"
+							"pl7.app/label": "Region",
+							// Pin each region to a colour, rather than letting each chart pick.
+							//
+							// Without this, graph-maker seeds a categorical mapping ONCE, from the
+							// values on screen when the mapping is first created, and never
+							// reasserts it. A landscape sees every position and gets the values in
+							// sorted order; a drill-down draws one mutation's sparse partner map
+							// and gets whatever surfaced first. The same region then reads green on
+							// one chart and purple on the other, which is worse than arbitrary —
+							// it invites the reader to compare two pictures that do not agree.
+							//
+							// Indices follow the sorted order the landscape already lands on, so
+							// nothing about it changes: CDRs take the first triadic triple, the
+							// frameworks the second. A run whose scheme subdivides a region emits
+							// names not listed here (CDR2_N, Graft); those still fall back to
+							// per-chart assignment, and only for the extra names.
+							"pl7.app/graph/palette": string(json.encode({
+								name: "triadic",
+								mapping: {
+									CDR1: 0, CDR2: 1, CDR3: 2,
+									FR1: 3, FR2: 4, FR3: 5, FR4: 6
+								}
+							}))
 						}
 					}
 				}],

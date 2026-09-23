@@ -383,6 +383,30 @@ export function makeLandscapeChartState(
  * mutation held fixed.
  */
 /**
+ * The key a chart's saved aesthetic mapping uses for the region track, as it appears inside
+ * `dataBindAes`. The source id embeds the column's resolve path, so this matches it in both
+ * frames at once.
+ */
+const REGION_AES_SOURCE = "region/region";
+
+/**
+ * Drops a chart's saved colour mapping for the region track, so it is seeded afresh.
+ *
+ * graph-maker reads the `pl7.app/graph/palette` annotation ONCE, when a mapping is created, and
+ * never reasserts it — "after that the mapping is the user's". A chart that already built its own
+ * mapping therefore keeps it, whatever the column now declares. Clearing the entry is the only
+ * way to let the pinned palette take effect on a chart that predates it.
+ */
+export function withRegionColoursReseeded(state: GraphMakerState): GraphMakerState {
+  const aes = (state as { dataBindAes?: Record<string, unknown> }).dataBindAes;
+  if (aes === undefined) return state;
+  const kept = Object.fromEntries(
+    Object.entries(aes).filter(([source]) => !source.includes(REGION_AES_SOURCE)),
+  );
+  return { ...state, dataBindAes: kept } as GraphMakerState;
+}
+
+/**
  * Pins "show empty rows/columns" on a drill-down chart.
  *
  * The partner map is sparse by nature — most positions carry no pair with the fixed mutation —
@@ -564,6 +588,15 @@ const dataModel = new DataModelBuilder({ kind })
       })),
     };
   })
+  // The region track now declares its colours (`pl7.app/graph/palette` in the workflow). Charts
+  // built before that carry a mapping seeded from whatever was on screen at the time, which is
+  // why a landscape and a drill-down could colour the same region differently. Dropping the
+  // saved mapping lets the declaration seed it, and every chart then agrees.
+  .migrate<BlockData>("v9", (v8) => ({
+    ...v8,
+    ...mapChartStates(v8, withRegionColoursReseeded),
+    drillDownChartState: withRegionColoursReseeded(v8.drillDownChartState),
+  }))
   .init(() => ({
     drillDowns: [],
     drillDownChartState: makeDrillDownChartState(),

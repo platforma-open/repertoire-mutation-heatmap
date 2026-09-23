@@ -7,6 +7,7 @@ import {
   scoreLabelsByKey,
   makeDrillDownChartState,
   withParentOnXAxis,
+  withRegionColoursReseeded,
 } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import { describe, expect, test } from "vitest";
 
@@ -212,5 +213,28 @@ describe("landscapePanelsFrom", () => {
       { spec: { name: "pl7.app/repertoire/regionAnnotation", annotations: {} } } as any,
     ]);
     expect(panels).toEqual([]);
+  });
+});
+
+describe("withRegionColoursReseeded", () => {
+  const regionSource =
+    '{"kind":"column","name":"{\\"name\\":\\"region/region\\",\\"resolvePath\\":[\\"main\\",\\"drillDownHeatmapPf\\"]}","type":"String"}';
+  const otherSource =
+    '{"kind":"column","name":"{\\"name\\":\\"parent/parentResidue\\",\\"resolvePath\\":[\\"main\\",\\"drillDownHeatmapPf\\"]}","type":"String"}';
+
+  test("drops the region mapping so the pinned palette can seed it", () => {
+    const state = {
+      dataBindAes: { [regionSource]: { order: ["FR1", "CDR1"] }, [otherSource]: { order: ["A"] } },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    const out = withRegionColoursReseeded(state);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(Object.keys((out as any).dataBindAes)).toEqual([otherSource]);
+  });
+
+  test("leaves a chart that has no saved mappings alone", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const state = { title: "x" } as any;
+    expect(withRegionColoursReseeded(state)).toBe(state);
   });
 });
