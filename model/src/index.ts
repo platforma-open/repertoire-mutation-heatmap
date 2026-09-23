@@ -295,26 +295,9 @@ export type BlockDataV3 = BlockDataV4;
 
 /** Data version `v4`: before per-position variant browsing, so no drill-down fields. */
 export type BlockDataV4 = Omit<
-  BlockDataV7,
+  BlockData,
   "drillDowns" | "activeDrillDown" | "drillDownChartState" | "drillDownTableState"
 >;
-
-/** Data version `v5`: drill-downs exist; `v6` only blanks their chart titles. */
-export type BlockDataV5 = BlockDataV7;
-
-/** Data version `v6`: the same shape; `v7` only pins a layer setting on drill-down charts. */
-export type BlockDataV6 = BlockDataV7;
-
-/** Data version `v7`: every drill-down carried its own chart and table state. */
-export type BlockDataV7 = Omit<
-  BlockData,
-  "drillDowns" | "drillDownChartState" | "drillDownTableState"
-> & {
-  drillDowns: (DrillDown & {
-    heatmapState: GraphMakerState;
-    tableState: PlDataTableStateV2;
-  })[];
-};
 
 /** Unified persisted data: workflow-relevant selections + UI view state. */
 export type BlockData = {
@@ -550,52 +533,20 @@ const dataModel = new DataModelBuilder({ kind })
     ),
   }))
   .migrate<BlockDataV4>("v4", (v3) => ({ ...v3, ...mapChartStates(v3, withParentOnXAxis) }))
-  // Additive: a project made before per-position variant browsing simply has none open.
-  .migrate<BlockDataV5>("v5", (v4) => ({ ...v4, drillDowns: [] }))
-  // The page header names the drill-down now, so the chart below it must not repeat the name.
-  // Charts created before that carry the designator as their own title and would print it twice.
-  .migrate<BlockDataV6>("v6", (v5) => ({
-    ...v5,
-    drillDowns: v5.drillDowns.map((d) => ({
-      ...d,
-      heatmapState: { ...d.heatmapState, title: "" },
-    })),
-  }))
-  // graph-maker writes its merged layer settings back into whatever state it is bound to, so a
-  // drill-down chart opened before this keeps the old default of hiding empty rows and columns
-  // and would draw only the positions carrying a pair. Same reason the `v3` migration had to
-  // pin NAValueAs rather than rely on the seed.
-  .migrate<BlockDataV7>("v7", (v6) => ({
-    ...v6,
-    drillDowns: v6.drillDowns.map((d) => ({
-      ...d,
-      heatmapState: withEmptyCellsShown(d.heatmapState),
-    })),
-  }))
-  // Collapse the per-drill-down chart and table states onto one of each. The first drill-down's
-  // settings win — they are all the same chart, so any of them is as good, and taking one keeps
-  // whatever the user had adjusted rather than resetting to defaults.
-  .migrate<BlockData>("v8", (v7) => {
-    const first = v7.drillDowns[0];
-    return {
-      ...v7,
-      drillDownChartState: first?.heatmapState ?? makeDrillDownChartState(),
-      drillDownTableState: first?.tableState ?? createPlDataTableStateV2(),
-      drillDowns: v7.drillDowns.map(({ mutationId, scoreKey, tab }) => ({
-        mutationId,
-        scoreKey,
-        tab,
-      })),
-    };
-  })
-  // The region track now declares its colours (`pl7.app/graph/palette` in the workflow). Charts
-  // built before that carry a mapping seeded from whatever was on screen at the time, which is
-  // why a landscape and a drill-down could colour the same region differently. Dropping the
-  // saved mapping lets the declaration seed it, and every chart then agrees.
-  .migrate<BlockData>("v9", (v8) => ({
-    ...v8,
-    ...mapChartStates(v8, withRegionColoursReseeded),
-    drillDownChartState: withRegionColoursReseeded(v8.drillDownChartState),
+  // Per-position variant browsing, in one step. This feature was never released, so the several
+  // versions it passed through during development are not history anyone's project has to walk —
+  // v4 is the last shape that shipped.
+  //
+  // Adds the drill-down list and the one chart and table state they share, and drops the saved
+  // region colour mapping so the palette the region column now declares can seed it. Without
+  // that last part a chart keeps whatever mapping it built for itself, and a landscape and a
+  // drill-down go on colouring the same region differently.
+  .migrate<BlockData>("v5", (v4) => ({
+    ...v4,
+    drillDowns: [],
+    drillDownChartState: makeDrillDownChartState(),
+    drillDownTableState: createPlDataTableStateV2(),
+    ...mapChartStates(v4, withRegionColoursReseeded),
   }))
   .init(() => ({
     drillDowns: [],
