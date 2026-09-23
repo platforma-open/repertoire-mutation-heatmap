@@ -858,11 +858,12 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
 
     // A section is one line of text: no subtitle, no indentation, and a delimiter carries no
     // label. Grouping is therefore the only way to say what a run of entries is, which is why
-    // each group sits between rules and every landscape entry repeats "Landscape".
+    // every landscape entry repeats "Landscape". Rules go BETWEEN groups only — a leading one
+    // would sit directly under the block header, which already divides them.
     const sections: (
       | { type: "link"; href: `/${string}`; label: string }
       | { type: "delimiter" }
-    )[] = [{ type: "delimiter" }];
+    )[] = [];
 
     if (panels.length === 0) {
       // Nothing produced yet. "/" is still listed, because it carries the empty state and its
