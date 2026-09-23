@@ -71,6 +71,24 @@ function outputPColumns(ctx: RenderCtx<BlockArgs, BlockData>, name: string) {
   }
 }
 
+/**
+ * Spec for a ref from the result pool, reported absent only once that absence has settled.
+ *
+ * `getPColumnSpecByRef` answers from the pool as it stands and registers nothing, so a column
+ * that has not reached the pool yet is indistinguishable from one that never will. The output
+ * settles at `undefined`, and a table fed by it then renders its not-ready text ("Select score
+ * columns in Settings, then Run") for the seconds the pool takes to fill, although nothing is
+ * wrong and the data is on its way. `getSpecs` does register — the middle layer marks the render
+ * unstable while the pool is incomplete (`specs_from_pool_incomplete`) — so consulting it on a
+ * miss keeps the output unsettled until the pool is complete and the absence is real.
+ */
+function poolSpecByRef(ctx: RenderCtx<BlockArgs, BlockData>, ref: PlRef): PColumnSpec | undefined {
+  const spec = ctx.resultPool.getPColumnSpecByRef(ref);
+  if (spec !== undefined) return spec;
+  ctx.resultPool.getSpecs();
+  return undefined;
+}
+
 // Profiler spec names used as join keys — must stay byte-identical to the names the profiler emits.
 const STATE_MATRIX = "pl7.app/repertoire/stateMatrix";
 const VARIANT_KEY_AXIS = "pl7.app/variantKey";
@@ -663,7 +681,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   .output("scoreOptions", (ctx) => {
     const stateMatrixRef = ctx.data.stateMatrixRef;
     if (stateMatrixRef === undefined) return undefined;
-    const stateSpec = ctx.resultPool.getPColumnSpecByRef(stateMatrixRef);
+    const stateSpec = poolSpecByRef(ctx, stateMatrixRef);
     if (!stateSpec) return undefined;
 
     const anchors: Record<string, PColumnSpec> = { main: stateSpec };
@@ -718,7 +736,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   .output("roundFrequencyOptions", (ctx) => {
     const stateMatrixRef = ctx.data.stateMatrixRef;
     if (stateMatrixRef === undefined) return undefined;
-    const stateSpec = ctx.resultPool.getPColumnSpecByRef(stateMatrixRef);
+    const stateSpec = poolSpecByRef(ctx, stateMatrixRef);
     if (!stateSpec) return undefined;
 
     const matches = dedupByLeafId(
@@ -829,7 +847,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
 
     const stateMatrixRef = ctx.data.stateMatrixRef;
     if (stateMatrixRef === undefined) return undefined;
-    const stateSpec = ctx.resultPool.getPColumnSpecByRef(stateMatrixRef);
+    const stateSpec = poolSpecByRef(ctx, stateMatrixRef);
     if (!stateSpec) return undefined;
 
     // Everything the profiler and the upstream blocks key on variantKey ALONE. Linkers are
