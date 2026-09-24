@@ -18,7 +18,7 @@ import { useApp } from "./app";
 import { useDrillDowns } from "./drillDown";
 
 const app = useApp<`/drilldown?m=${string}`>();
-const { close } = useDrillDowns();
+const { close, leave } = useDrillDowns();
 
 // The section href carries the substitution, so the page is addressable and one route serves
 // every open drill-down.
@@ -36,6 +36,21 @@ watch(
     if (id && app.model.data.activeDrillDown !== id) {
       app.model.data.activeDrillDown = id;
     }
+  },
+  { immediate: true },
+);
+
+// Leave when this page's own entry is gone.
+//
+// Two ways to be standing on one that no longer exists: a re-run dropped the score it was measured
+// on or moved the plot to another parent, and `useDrillDowns` pruned it; or the route was reached
+// directly with a `?m=` that was never open. Either way the section is not listed, so the sidebar
+// shows no selection while the page renders a title with no score and a map with no value column.
+watch(
+  [mutationId, () => app.model.data.drillDowns],
+  ([id, open]) => {
+    if (id && open.some((d) => d.mutationId === id)) return;
+    leave();
   },
   { immediate: true },
 );

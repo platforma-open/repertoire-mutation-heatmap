@@ -30,6 +30,15 @@ export type DrillDown = {
    * landscape's score tab.
    */
   scoreKey: string;
+  /**
+   * The parent this was opened under, so it can be dropped when the plot moves to another one.
+   *
+   * A `mutationId` names a position and a residue within one parent sequence, so it means nothing
+   * under a different parent — the browser would list no variants and the map would draw nothing.
+   * Optional because entries opened before this was recorded carry none; those are left alone
+   * rather than guessed at, and a new one replaces them as soon as the user browses again.
+   */
+  parentId?: string;
   /** Which tab is on screen. */
   tab: "table" | "heatmap";
 };
