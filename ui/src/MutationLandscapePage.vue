@@ -134,12 +134,24 @@ const PARENT_RESIDUE = "pl7.app/repertoire/parentResidue";
 const browsable = ref<Set<string>>(new Set());
 /** The enumeration above is async; until it settles an empty set means "not known yet". */
 const browsableLoaded = ref(false);
+/**
+ * Sequence number of the newest enumeration, so only the newest may write.
+ *
+ * The request is async and the watcher refires whenever a run finishes or the selected parent
+ * changes, so two can be in flight at once and the older can resolve last. Its answer would then
+ * stand as the browsable set for a landscape it no longer describes: a click either opening a
+ * browser holding nothing, or refused on a substitution that does have variants. The synchronous
+ * "no data" branch takes a number too — otherwise a request still in flight when the pframe goes
+ * away lands afterwards and revives a set for data that is gone.
+ */
+let browsableRequest = 0;
 watch(
   () => ({
     pframe: app.model.outputs.browsableMutationsPf,
     colId: app.model.outputs.browsableMutationsColId,
   }),
   async ({ pframe, colId }) => {
+    const request = ++browsableRequest;
     if (!pframe || !colId) {
       browsable.value = new Set();
       browsableLoaded.value = false;
@@ -150,9 +162,11 @@ watch(
         columnId: colId as PObjectId,
         axisIdx: 0,
       });
+      if (request !== browsableRequest) return;
       browsable.value = new Set(res.values.map((v) => v.value));
       browsableLoaded.value = true;
     } catch {
+      if (request !== browsableRequest) return;
       browsable.value = new Set();
       browsableLoaded.value = false;
     }
