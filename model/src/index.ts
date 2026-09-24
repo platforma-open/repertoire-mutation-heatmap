@@ -1,15 +1,45 @@
-import type { GraphMakerState } from "@milaboratories/graph-maker";
 import type {
-  ColumnRecipe,
-  RenderCtx,
   InferOutputsType,
   PColumnSpec,
   PFrameHandle,
-  PlDataTableStateV2,
-  PlRef,
   SUniversalPColumnId,
 } from "@platforma-sdk/model";
 import { kind } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.kind";
+import {
+  makeDrillDownChartState,
+  makeLandscapeChartState,
+  mapChartStates,
+  withEmptyNAValue,
+  withParentOnXAxis,
+  withRegionColoursReseeded,
+} from "./chart-state";
+import { dedupByLeafId, exactMatch, outputPColumns, poolSpecByRef } from "./render-utils";
+import { drillDownTableModel } from "./drill-down-table";
+import {
+  BROWSABLE_MUTATION,
+  LANDSCAPE_SCORE_INDEX,
+  LANDSCAPE_SCORE_REF,
+  LANDSCAPE_VALUE,
+  STATE_MATRIX,
+} from "./specs";
+import type {
+  BlockArgs,
+  BlockData,
+  BlockDataV1,
+  BlockDataV2,
+  BlockDataV3,
+  BlockDataV4,
+  LandscapePanel,
+} from "./types";
+
+// The model's public surface is the package root; the files are an internal split.
+export type * from "./types";
+export {
+  makeDrillDownChartState,
+  makeLandscapeChartState,
+  withParentOnXAxis,
+  withRegionColoursReseeded,
+} from "./chart-state";
 // `createPlDataTableV3`'s return type reaches into `Nil` from helpers, and TS cannot name it
 // from here without this — the same re-export every block building a table carries.
 export type * from "@milaboratories/helpers";
@@ -17,119 +47,9 @@ import {
   BlockModelV3,
   ColumnsCollection,
   createPlDataTableStateV2,
-  DataColumn,
   DataModelBuilder,
   createPFrameForGraphs,
-  createPlDataTableV3,
-  extractPObjectId,
 } from "@platforma-sdk/model";
-
-/** A selector `name`/`domain` given as a bare string normalizes to a REGEX matcher, so an
- *  exact name must be spelled out. `"pl7.app/frequency"` as a regex is unanchored and `.`
- *  matches any character, which would also admit `pl7.app/frequencyRatio`. */
-const exactMatch = (value: string) => [{ type: "exact" as const, value }];
-
-/** Collapse discovery hits to one recipe per storage column, first hit wins.
- *
- *  The retired `findColumns()` keyed its result map on the leaf column, merging several
- *  reachability variants into one entry. `discover().getColumns()` returns one recipe PER
- *  variant instead, and the value these options carry is the leaf id — so without this,
- *  variants of one column become several dropdown entries sharing a single value. */
-function dedupByLeafId(recipes: ColumnRecipe[]): ColumnRecipe[] {
-  const seen = new Set<string>();
-  return recipes.filter((recipe) => {
-    const leaf = extractPObjectId(recipe.id);
-    if (seen.has(leaf)) return false;
-    seen.add(leaf);
-    return true;
-  });
-}
-
-/**
- * The p-columns of one workflow output, or undefined while the block is still computing.
- *
- * `getPColumns()` throws two different ways and they must not be treated alike. Mid-run the
- * resource tree is incomplete and traversal can throw — that is transient and means "not yet".
- * Once the block is ready-or-error, a throw means the workflow FAILED, and swallowing it makes a
- * crashed run indistinguishable from a healthy empty one: the output reports ok with no value,
- * the block shows Done, and the map is simply blank. That cost a day of debugging once already,
- * so past readiness the error is rethrown and surfaces on the output.
- */
-function outputPColumns(ctx: RenderCtx<BlockArgs, BlockData>, name: string) {
-  try {
-    const node = ctx.outputs?.resolve(name);
-    if (node === undefined) return undefined;
-    return node.getPColumns();
-  } catch (e) {
-    // Several outputs are emitted conditionally — the composition map only with rounds
-    // selected, the drill-down only with scores. One the workflow chose not to emit is a
-    // MISSING FIELD, not a failure, and has to stay invisible or every block without an
-    // enrichment view reports an error.
-    if (String(e).includes("field not found")) return undefined;
-    if (ctx.outputs?.getIsReadyOrError() === false) return undefined;
-    throw e;
-  }
-}
-
-/**
- * Spec for a ref from the result pool, reported absent only once that absence has settled.
- *
- * `getPColumnSpecByRef` answers from the pool as it stands and registers nothing, so a column
- * that has not reached the pool yet is indistinguishable from one that never will. The output
- * settles at `undefined`, and a table fed by it then renders its not-ready text ("Select score
- * columns in Settings, then Run") for the seconds the pool takes to fill, although nothing is
- * wrong and the data is on its way. `getSpecs` does register — the middle layer marks the render
- * unstable while the pool is incomplete (`specs_from_pool_incomplete`) — so consulting it on a
- * miss keeps the output unsettled until the pool is complete and the absence is real.
- */
-function poolSpecByRef(ctx: RenderCtx<BlockArgs, BlockData>, ref: PlRef): PColumnSpec | undefined {
-  const spec = ctx.resultPool.getPColumnSpecByRef(ref);
-  if (spec !== undefined) return spec;
-  ctx.resultPool.getSpecs();
-  return undefined;
-}
-
-// Profiler spec names used as join keys — must stay byte-identical to the names the profiler emits.
-const STATE_MATRIX = "pl7.app/repertoire/stateMatrix";
-const VARIANT_KEY_AXIS = "pl7.app/variantKey";
-
-// One such column per selected score. Must stay byte-identical to the workflow's import spec.
-const LANDSCAPE_VALUE = "pl7.app/repertoire/singleMutantValue";
-const LANDSCAPE_SCORE_REF = "pl7.app/repertoire/landscapeScoreRef";
-const LANDSCAPE_SCORE_INDEX = "pl7.app/repertoire/landscapeScoreIndex";
-
-// Drill-down columns. Same byte-identical contract with the workflow as the landscape names.
-const MUTATION_ID_AXIS = "pl7.app/repertoire/mutationId";
-const MUTATION_VARIANT_LINK = "pl7.app/repertoire/mutationVariantLink";
-const BROWSABLE_MUTATION = "pl7.app/repertoire/browsableMutation";
-
-/** One mutation-landscape chart. */
-export type LandscapePanel = {
-  /** The score column's own id — the key of this chart's state in `singleMutantHeatmapStates`. */
-  key: string;
-  label: string;
-  /** Position in the user's score order. */
-  index: number;
-  spec: PColumnSpec;
-};
-
-/** One open per-position variant browser, added by browsing into a substitution. */
-export type DrillDown = {
-  /**
-   * The substitution's designator (`A5C`) — the `mutationId` axis value the drill-down data is
-   * pinned to, the section label, and the `?m=` query parameter. One string, so all three agree
-   * without anything being re-derived.
-   */
-  mutationId: string;
-  /**
-   * The score whose map this was opened from, as a key into `singleMutantHeatmapStates`. Carried
-   * so a drill-down never silently changes what it is measuring when the user switches the
-   * landscape's score tab.
-   */
-  scoreKey: string;
-  /** Which tab is on screen. */
-  tab: "table" | "heatmap";
-};
 
 /**
  * The section href of one drill-down. The model builds the section list with it and the UI
@@ -206,317 +126,6 @@ export function drillDownHref(mutationId: string): `/drilldown?m=${string}` {
 
 // Subtitle fallback when no dataset is selected yet.
 const NO_DATASET_LABEL = "No dataset selected";
-
-/** Workflow-facing args, derived from `BlockData`. */
-export type BlockArgs = {
-  /** Profiler state matrix `[variantKey, parentId, position] -> state`. */
-  stateMatrixRef: PlRef;
-  /** Parent to scope the whole plot to. Required — the args projection throws until it is set
-   *  (the UI auto-selects the first parent), so the workflow only ever runs single-parent. */
-  selectedParentId: string;
-  /**
-   * Ordered per-round frequency columns from the enrichment block (composition-enrichment view).
-   * Each is one round's `[variantKey] -> frequency` (`pl7.app/frequency`); `[0]` is the baseline round R0.
-   * Empty = composition-enrichment view off.
-   */
-  roundFrequencyRefs: SUniversalPColumnId[];
-  /**
-   * Fraction-space epsilon added to both sides of the composition ratio before log2,
-   * to keep emergent/vanished residues finite. Frequencies are in [0,1] (not counts),
-   * so this is a small value (default 1e-6), not a count pseudocount.
-   */
-  compositionEpsilon: number;
-  /**
-   * Per-variant score columns plotted in the mutation landscape, in the user's chosen
-   * order (which becomes the facet order). Empty = landscape off.
-   */
-  scoreRefs: SUniversalPColumnId[];
-};
-
-/** UI view state kept out of the workflow args. */
-export type BlockUiState = {
-  compositionHeatmapState: GraphMakerState;
-  /**
-   * Placeholder landscape chart, shown while no score column has produced data. Carries the
-   * page's empty state and its Settings drawer — on a fresh block, the only way into Settings.
-   */
-  singleMutantHeatmapState: GraphMakerState;
-  /**
-   * One landscape chart per score, keyed by the score column's id (not its position, so settings
-   * survive a reorder). The UI creates entries as runs produce new score columns; a dropped
-   * score's entry is left behind, and comes back into use if the score is picked again.
-   */
-  singleMutantHeatmapStates: Record<string, GraphMakerState>;
-  /**
-   * @deprecated Each score now has its own page and the route carries the choice, so nothing
-   * reads this. Left in place rather than migrated away: it is one unused optional field, and
-   * dropping it would rewrite every saved project's data for no gain.
-   */
-  selectedLandscapeScore?: string;
-  /**
-   * Open drill-downs, in the order they were opened — one section each, under the landscape.
-   *
-   * UI state on purpose: it reaches neither `args` nor `prerunArgs`, so browsing into a
-   * substitution never makes the block stale and no Run button appears. The workflow already
-   * precomputed every cell's drill-down, so opening one only filters data the block holds.
-   */
-  drillDowns: DrillDown[];
-  /**
-   * The drill-down whose page is on screen, as a `mutationId`. The model has no route access, so
-   * the page writes this on mount; `drillDownTable` reads it to know which mutation to filter to.
-   */
-  activeDrillDown?: string;
-  /**
-   * Chart and table settings for the drill-down pages — ONE of each, shared by all of them.
-   *
-   * Every ui-state write ships the whole of `data` to the backend, and a per-drill-down
-   * `GraphMakerState` plus `PlDataTableStateV2` is ~11 KB each. Four open drill-downs made
-   * `data` 67 KB, and every open, close and tab switch paid to send all of it — measured at
-   * 2.3-4.6 s against a remote backend, versus 123 ms for a write that carries only navigation.
-   *
-   * Sharing is sound here rather than merely cheap: every drill-down draws the same chart with a
-   * different mutation pinned, and the pin travels in `fixedOptions`, which is never persisted.
-   * The table state is keyed internally by `sourceId`, so it already caches per mutation.
-   *
-   * The cost: settings changed on one drill-down apply to all of them.
-   */
-  drillDownChartState: GraphMakerState;
-  drillDownTableState: PlDataTableStateV2;
-};
-
-/** Data version `v1`: one faceted landscape chart, so one chart state. */
-export type BlockDataV1 = Omit<BlockDataV4, "singleMutantHeatmapStates" | "selectedLandscapeScore">;
-
-/** Data version `v2`: today's shape. `v3` rewrites values inside it, and adds no field. */
-export type BlockDataV2 = BlockDataV4;
-
-/** Data version `v3`: the same shape again; `v4` only rewrites chart states. */
-export type BlockDataV3 = BlockDataV4;
-
-/** Data version `v4`: before per-position variant browsing, so no drill-down fields. */
-export type BlockDataV4 = Omit<
-  BlockData,
-  "drillDowns" | "activeDrillDown" | "drillDownChartState" | "drillDownTableState"
->;
-
-/** Unified persisted data: workflow-relevant selections + UI view state. */
-export type BlockData = {
-  // Block label shown as the subtitle. `customBlockLabel` is the user-renamed override;
-  // `defaultBlockLabel` holds the selected dataset's name, snapshotted by the UI on selection
-  // (the `.subtitle` context is args-only and can't resolve the dataset label live).
-  customBlockLabel?: string;
-  defaultBlockLabel?: string;
-  stateMatrixRef?: PlRef;
-  /** Parent the plot is scoped to (UI auto-selects the first available on load). */
-  selectedParentId?: string;
-  /** Ordered per-round frequency columns; `[0]` = baseline R0. Empty = composition view off. */
-  roundFrequencyRefs: SUniversalPColumnId[];
-  /** Fraction-space epsilon for the composition ratio (default 1e-6). */
-  compositionEpsilon: number;
-  /** Ordered per-variant score columns for the mutation landscape. Empty = no map rendered. */
-  scoreRefs: SUniversalPColumnId[];
-} & BlockUiState;
-
-/**
- * Default state for a mutation-landscape chart. Used by `init` for the placeholder and by the UI
- * for each score a run produces, so the two look alike.
- *
- * @param currentTab `"settings"` opens the Settings drawer, `null` leaves it closed
- */
-export function makeLandscapeChartState(
-  title: string,
-  currentTab: "settings" | null,
-): GraphMakerState {
-  return {
-    title,
-    template: "heatmap",
-    currentTab,
-    // Cells are per-variant scores taken directly, not counts — GraphMaker's row z-score and
-    // transform would both distort them, and the values arrive already normalized upstream.
-    layersSettings: {
-      heatmap: {
-        normalizationDirection: null,
-        transform: null,
-        // The landscape's cell axes are declared dense, so the grid carries a record for every
-        // (position, state) and the ones no single mutant covers arrive with no value. `null`
-        // keeps those empty; the default of 0 would paint them as real cells at the bottom of
-        // the colour scale, filling the map with substitutions that were never measured.
-        NAValueAs: null,
-      },
-    },
-    // Square cells, matching the enrichment map. No `facetColumns`: no facets left to lay out.
-    axesSettings: {
-      axisX: {
-        cellSize: 20,
-        // Two-part labels ("32, D": position, then the residue it started as) are too wide to sit
-        // flat under a 20px column.
-        axisLabelsAngle: 45,
-      },
-      axisY: {
-        hideAxisLabels: false,
-        cellSize: 20,
-      },
-    },
-  };
-}
-
-/**
- * Default state for a drill-down's partner map. Same shape as a landscape chart — one colour
- * scale, no normalization, absent cells left empty — because it is the same map with one
- * mutation held fixed.
- */
-/**
- * The key a chart's saved aesthetic mapping uses for the region track, as it appears inside
- * `dataBindAes`. The source id embeds the column's resolve path, so this matches it in both
- * frames at once.
- */
-const REGION_AES_SOURCE = "region/region";
-
-/**
- * Drops a chart's saved colour mapping for the region track, so it is seeded afresh.
- *
- * graph-maker reads the `pl7.app/graph/palette` annotation ONCE, when a mapping is created, and
- * never reasserts it — "after that the mapping is the user's". A chart that already built its own
- * mapping therefore keeps it, whatever the column now declares. Clearing the entry is the only
- * way to let the pinned palette take effect on a chart that predates it.
- */
-export function withRegionColoursReseeded(state: GraphMakerState): GraphMakerState {
-  const aes = (state as { dataBindAes?: Record<string, unknown> }).dataBindAes;
-  if (aes === undefined) return state;
-  const kept = Object.fromEntries(
-    Object.entries(aes).filter(([source]) => !source.includes(REGION_AES_SOURCE)),
-  );
-  return { ...state, dataBindAes: kept } as GraphMakerState;
-}
-
-/**
- * Pins "show empty rows/columns" on a drill-down chart.
- *
- * The partner map is sparse by nature — most positions carry no pair with the fixed mutation —
- * and without this it draws only the few positions that do. The region band beneath it then
- * shrinks to those, and the reader loses where in the parent they are looking. With the value
- * column's axes declared dense, the full grid arrives; this is what makes it render.
- */
-function withEmptyCellsShown(state: GraphMakerState): GraphMakerState {
-  return {
-    ...state,
-    layersSettings: {
-      ...state.layersSettings,
-      heatmap: {
-        ...state.layersSettings?.heatmap,
-        showEmptyRows: true,
-        showEmptyColumns: true,
-      },
-    },
-  };
-}
-
-export function makeDrillDownChartState(): GraphMakerState {
-  // Empty title on purpose. The page header already names the substitution and the score, and
-  // graph-maker would print the same thing again directly beneath it.
-  return withEmptyCellsShown(makeLandscapeChartState("", null));
-}
-
-/**
- * Pins "Treat NA value as: empty" on a landscape chart's saved state.
- *
- * The landscape's cell axes are declared dense, so the grid now carries a record for every
- * (position, state) and the substitutions no single mutant covered arrive with no value. They
- * must stay empty. Seeding `makeLandscapeChartState` only reaches charts created from now on:
- * graph-maker writes its whole merged layer settings back into the state it is bound to, so any
- * chart opened before this change has the old default of 0 pinned in its own state, and would
- * paint every uncovered substitution as a real zero-valued cell.
- */
-function withEmptyNAValue(state: GraphMakerState): GraphMakerState {
-  return {
-    ...state,
-    layersSettings: {
-      ...state.layersSettings,
-      heatmap: { ...state.layersSettings?.heatmap, NAValueAs: null },
-    },
-  };
-}
-
-/**
- * The parent-residue column's key inside both heat-map frames, as it appears inside a saved
- * selector's source id. Distinct from the highlight flag's `parentFlag/isParentResidue`, which
- * contains this word too but not this path.
- */
-const PARENT_RESIDUE_SOURCE = "parent/parentResidue";
-
-const carriesParentResidue = (selectedSource: string) =>
-  selectedSource.includes(PARENT_RESIDUE_SOURCE);
-
-/**
- * Angles the X labels of a chart saved before the parent residue joined the axis, and moves the
- * source across.
- *
- * The move is belt and braces — graph-maker reapplies a default whose value has changed, so it
- * would arrive anyway — but the angle is not a default option. It lives in the chart's own axes
- * settings, which are seeded once when the chart is created, so without this an existing chart gets
- * the two-part label flat and overlapping under a 20px column.
- *
- * Keyed on the parent still being an annotation track, which is what "saved before this" looks
- * like. The region track is deliberately left where it is.
- */
-export function withParentOnXAxis(state: GraphMakerState): GraphMakerState {
-  const options = state.optionsState;
-  if (options?.type !== "heatmap") {
-    return state;
-  }
-  const annotations = options.components.annotationsX.selectorStates;
-  const parent = annotations.find((selector) => carriesParentResidue(selector.selectedSource));
-  if (!parent) {
-    // No parent track to move — and no second label part, so tilting the labels would buy nothing.
-    return state;
-  }
-  const alreadyOnX = options.components.x.selectorStates.some((selector) =>
-    carriesParentResidue(selector.selectedSource),
-  );
-  return {
-    ...state,
-    optionsState: {
-      ...options,
-      components: {
-        ...options.components,
-        // Appended, so position stays the first part and the label reads in that order.
-        x: alreadyOnX
-          ? options.components.x
-          : {
-              type: "simple",
-              selectorStates: [...options.components.x.selectorStates, parent],
-            },
-        annotationsX: {
-          type: "simple",
-          selectorStates: annotations.filter((selector) => selector !== parent),
-        },
-      },
-    },
-    axesSettings: {
-      ...state.axesSettings,
-      axisX: { ...state.axesSettings?.axisX, axisLabelsAngle: 45 },
-    },
-  };
-}
-
-/** Applies a rewrite to every chart state the block keeps. */
-type ChartStates = Pick<
-  BlockData,
-  "compositionHeatmapState" | "singleMutantHeatmapState" | "singleMutantHeatmapStates"
->;
-
-function mapChartStates(
-  data: ChartStates,
-  rewrite: (state: GraphMakerState) => GraphMakerState,
-): ChartStates {
-  return {
-    compositionHeatmapState: rewrite(data.compositionHeatmapState),
-    singleMutantHeatmapState: rewrite(data.singleMutantHeatmapState),
-    singleMutantHeatmapStates: Object.fromEntries(
-      Object.entries(data.singleMutantHeatmapStates).map(([key, state]) => [key, rewrite(state)]),
-    ),
-  };
-}
 
 const dataModel = new DataModelBuilder({ kind })
   .from<BlockDataV1>("v1")
@@ -811,76 +420,9 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     )?.id;
   })
 
-  // Table tab: every variant carrying the active drill-down's substitution, at any mutation
-  // count. The block exports only the [variantKey, mutationId] linker as the primary column;
-  // sequence, mutations, mutation count, abundance and the scores are joined in from the result
-  // pool on the shared variantKey axis, so none of them is copied into this block's own exports
-  // and the user can surface any other variant-keyed column later.
-  .outputWithStatus("drillDownTable", (ctx) => {
-    const mutationId = ctx.data.activeDrillDown;
-    if (mutationId === undefined) return undefined;
-
-    const linkCols = outputPColumns(ctx, "mutationVariantLinkPf");
-    const linker = linkCols?.find((c) => c.spec.name === MUTATION_VARIANT_LINK);
-    if (linker === undefined) return undefined;
-
-    // Axis order is the workflow's: variantKey at 0 (what the secondaries join on), mutationId
-    // at 1 (what the filter pins).
-    const mutationAxis = linker.spec.axesSpec.find((a) => a.name === MUTATION_ID_AXIS);
-    if (mutationAxis === undefined) return undefined;
-
-    const stateMatrixRef = ctx.data.stateMatrixRef;
-    if (stateMatrixRef === undefined) return undefined;
-    const stateSpec = poolSpecByRef(ctx, stateMatrixRef);
-    if (!stateSpec) return undefined;
-
-    // Everything the profiler and the upstream blocks key on variantKey ALONE. Linkers are
-    // excluded — they are the hop, not a column to show.
-    //
-    // The axis check is what keeps the table honest, and it is not optional. A zero-hop
-    // discovery also reaches columns carrying axes the linker does not: the state matrix is
-    // `[variantKey, parentId, position]` and the region track is `[parentId, position]`.
-    // Joining either adds a position axis, and one variant becomes one row PER POSITION — ~110x,
-    // which turned a few hundred variants into 66,220 rows of the same variant repeated.
-    //
-    // Per-sample columns are excluded by the same rule. They belong in sheets rather than rows;
-    // until that exists, an abundance split by sample is left out rather than multiplying the
-    // table by the sample count.
-    const secondary = dedupByLeafId(
-      ColumnsCollection(["result_pool"])
-        .discover({
-          anchors: { main: stateSpec },
-          mode: "enrichment",
-          maxHops: 0,
-          exclude: [{ annotations: { "pl7.app/isLinkerColumn": exactMatch("true") } }],
-        })
-        .getColumns(),
-    ).filter((recipe) => {
-      const axes = recipe.getSpec().axesSpec;
-      return axes.length === 1 && axes[0].name === VARIANT_KEY_AXIS;
-    });
-
-    return createPlDataTableV3(ctx, {
-      primaryColumns: [DataColumn.fromColumn(linker)],
-      columns: secondary,
-      // Model-side default, so the table opens already scoped to the browsed substitution
-      // instead of showing the whole membership map for an instant.
-      filters: {
-        type: "and",
-        filters: [
-          {
-            type: "patternEquals",
-            column: {
-              type: "axis",
-              id: { name: mutationAxis.name, type: mutationAxis.type, domain: mutationAxis.domain },
-            },
-            value: mutationId,
-          },
-        ],
-      },
-      tableState: ctx.data.drillDownTableState,
-    });
-  })
+  // Table tab. The assembly lives in its own file: the axis-filter rule it turns on needs more
+  // explaining than it needs code.
+  .outputWithStatus("drillDownTable", (ctx) => drillDownTableModel(ctx))
 
   // Composition-enrichment heat map: per-round positional log2 fold change
   // `[round, parentId, position, state] -> log2FC`. Present only when round-frequency
