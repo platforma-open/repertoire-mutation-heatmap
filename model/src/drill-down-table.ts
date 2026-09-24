@@ -16,8 +16,15 @@ import { dedupByLeafId, exactMatch, outputPColumns, poolSpecByRef } from "./rend
 export function drillDownTableModel(
   ctx: RenderCtx<BlockArgs, BlockData>,
 ): PlDataTableModel | undefined {
+  // Not a precondition. The table is built as soon as the run has produced a linker, whether or
+  // not anything is being browsed, and `activeDrillDown` only decides what it is pinned to.
+  //
+  // Returning nothing here instead would mean the table does not exist until the first browse,
+  // and a grid mounting against a model that has to be built from scratch sits on its not-ready
+  // overlay for the seconds that takes — the placeholder on the first drill-down of a block.
+  // `sourceId` comes from the persisted table state and not from the filters, so pinning a
+  // mutation is a re-query on a source that already exists, not a new one.
   const mutationId = ctx.data.activeDrillDown;
-  if (mutationId === undefined) return undefined;
 
   const linkCols = outputPColumns(ctx, "mutationVariantLinkPf");
   const linker = linkCols?.find((c) => c.spec.name === MUTATION_VARIANT_LINK);
@@ -117,20 +124,28 @@ export function drillDownTableModel(
     columns: secondary,
     displayOptions: { visibility },
     // Model-side default, so the table opens already scoped to the browsed substitution
-    // instead of showing the whole membership map for an instant.
-    filters: {
-      type: "and",
-      filters: [
-        {
-          type: "patternEquals",
-          column: {
-            type: "axis",
-            id: { name: mutationAxis.name, type: mutationAxis.type, domain: mutationAxis.domain },
+    // instead of showing the whole membership map for an instant. Unpinned only before anything
+    // has ever been browsed, where nothing renders the table and the width of it costs nothing.
+    filters:
+      mutationId === undefined
+        ? undefined
+        : {
+            type: "and",
+            filters: [
+              {
+                type: "patternEquals",
+                column: {
+                  type: "axis",
+                  id: {
+                    name: mutationAxis.name,
+                    type: mutationAxis.type,
+                    domain: mutationAxis.domain,
+                  },
+                },
+                value: mutationId,
+              },
+            ],
           },
-          value: mutationId,
-        },
-      ],
-    },
     tableState: ctx.data.drillDownTableState,
   });
 }

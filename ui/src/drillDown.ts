@@ -66,14 +66,9 @@ export function useDrillDowns() {
    */
   function open(mutationId: string, scoreKey: string) {
     // Tell the model which substitution is active now, in the same write that adds the section,
-    // rather than leaving it to the page's on-mount watcher.
-    //
-    // `drillDownTable` reads `activeDrillDown` directly and returns nothing while it is
-    // undefined, so the page would mount against a settled "not ready" model and render the
-    // table's placeholder ("Select score columns in Settings, then Run") until the route landed,
-    // the page wrote the id back, and the model recomputed a round trip later. Visible only on
-    // the first open after none were left — with one already open the model has a live table and
-    // merely re-filters — which is exactly what made it look like a first-run quirk.
+    // rather than leaving it to the page's on-mount watcher a route change later. One round trip
+    // earlier, and on a block whose very first drill-down this is, one fewer pass through the
+    // undefined state that `close` now avoids.
     app.model.data.activeDrillDown = mutationId;
 
     const already = app.model.data.drillDowns.some((d) => d.mutationId === mutationId);
@@ -120,14 +115,21 @@ export function useDrillDowns() {
   function close(mutationId: string) {
     const remaining = app.model.data.drillDowns.filter((d) => d.mutationId !== mutationId);
     app.model.data.drillDowns = remaining;
-    if (app.model.data.activeDrillDown === mutationId) {
-      // Hand the model straight to the substitution we are switching to. Blanking it first
-      // costs a visible round trip: `drillDownTable` reads `activeDrillDown` directly, so an
-      // undefined one is a settled `undefined` — the table drops to its not-ready state
-      // ("Select score columns in Settings, then Run"), throws away its columns and data
-      // source, and has to rebuild from nothing once the route lands and the page writes the
-      // new id back. Undefined only when nothing is left, where it is the truth.
-      app.model.data.activeDrillDown = remaining[remaining.length - 1]?.mutationId;
+    // Hand the model straight to the substitution we are switching to, and when there is none
+    // left, leave the field naming the one just closed rather than blanking it.
+    //
+    // `drillDownTable` is the only reader, and it returns nothing for an undefined id — which
+    // tears the whole table down: model output, columns, data source. Rebuilding that is the
+    // multi-second cold start behind the not-ready placeholder on the next drill-down opened,
+    // because a freshly mounted grid shows that overlay until its first rows arrive. Recomputing
+    // from one live table to another does not go through that state, so the grid fills before
+    // the overlay is perceptible.
+    //
+    // A stale id costs nothing: no section lists it, no page renders it, and `.sections()` does
+    // not read it. The model simply keeps one table spec warm for a page nobody is on.
+    const next = remaining[remaining.length - 1];
+    if (next !== undefined && app.model.data.activeDrillDown === mutationId) {
+      app.model.data.activeDrillDown = next.mutationId;
     }
     leave();
   }
