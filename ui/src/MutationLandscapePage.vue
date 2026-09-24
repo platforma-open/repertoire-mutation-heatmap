@@ -244,7 +244,9 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
 
   return options;
 });
-console.log("test2 3");
+
+/** Bound to both the visible hint and its `title`, so an edit cannot leave the two disagreeing. */
+const CLICK_HINT = "Click a cell to browse variants carrying that substitution";
 </script>
 
 <template>
@@ -282,6 +284,14 @@ console.log("test2 3");
     :readonly-inputs="['x', 'y', 'value']"
     @cell-click="onCellClick"
   >
+    <!-- A heat map cell reads as a swatch, and nothing about the map says one opens anything.
+         Said once in the title line, where the eye already is when the page loads, rather than as
+         a notification — that would nag on every visit to say something true only once. Not on the
+         placeholder chart below: it has no cells to click. -->
+    <template #titleLineSlot>
+      <span :class="$style.clickHint" :title="CLICK_HINT">{{ CLICK_HINT }}</span>
+    </template>
+
     <template #settingsSlot>
       <Settings />
     </template>
@@ -306,6 +316,30 @@ console.log("test2 3");
 </template>
 
 <style module>
+/* graph-maker's title-line slot is `margin-left: auto` in a flex header whose title input is 40px
+   tall, so the hint lands at the right end of the title row and needs its own vertical centring.
+   It truncates rather than pushing the score name out of the header, and carries the full text as
+   a `title` so a clipped hint is still readable on hover. */
+.clickHint {
+  align-self: center;
+  min-width: 0;
+  padding-left: 16px;
+  color: var(--txt-03);
+  font-size: 14px;
+  line-height: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The slot wrapper is graph-maker's own, and a flex item's automatic minimum size is its content
+   width — so without this the hint refuses to shrink and overflows the header instead of
+   ellipsing. Reaching for another package's class is fragile, but the failure mode if it is ever
+   renamed is the behaviour we have today, not a broken page. */
+:global(.chart_titleLineSlot) {
+  min-width: 0;
+}
+
 /* Matches graph-maker's own `.alerts` container so the two stack alike. */
 .alerts {
   position: fixed;
