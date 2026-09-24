@@ -65,6 +65,17 @@ export function useDrillDowns() {
    *        what the user was looking at
    */
   function open(mutationId: string, scoreKey: string) {
+    // Tell the model which substitution is active now, in the same write that adds the section,
+    // rather than leaving it to the page's on-mount watcher.
+    //
+    // `drillDownTable` reads `activeDrillDown` directly and returns nothing while it is
+    // undefined, so the page would mount against a settled "not ready" model and render the
+    // table's placeholder ("Select score columns in Settings, then Run") until the route landed,
+    // the page wrote the id back, and the model recomputed a round trip later. Visible only on
+    // the first open after none were left — with one already open the model has a live table and
+    // merely re-filters — which is exactly what made it look like a first-run quirk.
+    app.model.data.activeDrillDown = mutationId;
+
     const already = app.model.data.drillDowns.some((d) => d.mutationId === mutationId);
     if (!already) {
       // Replace the array rather than pushing: the model's `.sections()` reads it, and a whole
