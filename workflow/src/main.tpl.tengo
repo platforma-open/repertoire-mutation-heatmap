@@ -170,9 +170,9 @@ wf.body(func(args) {
 	// Y-axis (state) label, alphabet-aware: residues for the aa matrix, bases for nt.
 	stateAxisLabel := (alphabet == "aminoacid") ? "Amino Acids" : "Nucleotides"
 
-	// The landscape's cell is (position, state), and its parent-residue cell is ABSENT by
-	// construction: a single mutant differs from its parent, so no variant carries the parent
-	// residue at its own position. Marking that cell needs it to exist, so both cell axes are
+	// The landscape's cell is (position, state). Its parent-residue cell holds a value only when
+	// the dataset has a WT variant: a single mutant differs from its parent, so no single mutant
+	// carries the parent residue at its own position. Marking that cell needs it to exist, so both cell axes are
 	// declared dense and graph-maker asks the engine for the full position x state grid, with an
 	// absent value wherever no single mutant covered the substitution. Identity is name + type +
 	// domain, so these annotated copies still join with the position-keyed annotation tracks.
@@ -372,7 +372,8 @@ wf.body(func(args) {
 	// (derived above from the full population) keeps only the position where the variant actually
 	// differs — exactly one row per variant.
 	//
-	// Cells with no covering single-mutant variant are ABSENT, never filled from a fallback.
+	// Cells with no covering single-mutant variant are ABSENT, never filled from a fallback. The
+	// parent cells are the one exception: they carry the WT variant's score, when there is one.
 	scoreRefs := args.scoreRefs
 	mutCountEntries := columns.getColumns("mutationCount")
 	hasLandscape := !is_undefined(scoreRefs) && len(scoreRefs) > 0 &&
@@ -431,6 +432,17 @@ wf.body(func(args) {
 		// parentId is dropped again below; kept here so the landscape select is unchanged.
 		mutCells := singleMutCells.
 			select(pt.col("variantKey"), pt.col("parentId"), pt.col("position"), pt.col("state"))
+
+		// The parent cell at each position carries the WT variant's own score: a variant with
+		// zero mutations holds the parent residue everywhere, so its state-matrix rows are
+		// exactly the parent cells.
+		wtMutants := mutCounts.
+			filter(pt.col("mutCount").eq(pt.lit(0))).
+			select(pt.col("variantKey"))
+		wtCells := smDf.
+			join(wtMutants, { on: "variantKey", how: "inner" }).
+			select(pt.col("variantKey"), pt.col("parentId"), pt.col("position"), pt.col("state"))
+		landscapeCells := pt.concat([mutCells, wtCells])
 
 		// --- Drill-down precalc ---
 		// Everything a click needs, computed once for EVERY cell. A click then filters data the
@@ -616,7 +628,7 @@ wf.body(func(args) {
 			// No parentId: already scoped to one parent, so the axis would be constant — and
 			// GraphMaker demands every axis be consumed by an input, which put a one-choice
 			// "Show for" selector above the plot.
-			mutCells.
+			landscapeCells.
 				join(sDf, { on: "variantKey", how: "inner" }).
 				select(
 					pt.col("position"),
