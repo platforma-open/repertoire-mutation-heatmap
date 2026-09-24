@@ -49,5 +49,4 @@ clicking it explains why — the substitution is carried by no multi-mutant, or 
 parent residue and names no substitution at all. Nothing is announced up front, and no click is
 silently ignored, which is what made an empty dataset read as a broken block. Only cells with at least one co-occurring variant
 respond — the rest would open a browser holding nothing but the singleton just clicked, so they
-keep the default cursor and do nothing. Needs the graph-maker release that adds the heat map
-`@cell-click` event.
+keep the default cursor and do nothing.
