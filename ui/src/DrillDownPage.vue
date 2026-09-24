@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { PredefinedGraphOption } from "@milaboratories/graph-maker";
 import { GraphMaker } from "@milaboratories/graph-maker";
+import type { PColumnSpec } from "@platforma-sdk/model";
 import {
   PlAgDataTableV2,
   PlBlockPage,
@@ -67,6 +68,32 @@ const pageTitle = computed(() => {
       : scoreLabelsByKey(app.model.outputs.singleMutantHeatmapPCols)[key];
   return drillDownLabel(mutationId.value, label);
 });
+
+/**
+ * Keep the Metadata list to this drill-down's own score.
+ *
+ * The workflow writes one pair frame per score, and each carries its own copy of
+ * `partnerMutation` and `pairVariantKey` alongside `cellValue` — so a block with four selected
+ * scores puts four identically-labelled "Partner mutation" and four "Variant" entries in the
+ * picker, and nothing on screen says which is which. Only `cellValue` actually differs per score:
+ * the partner substitution and the variant carrying the pair are properties of the cell.
+ *
+ * Emitting them once instead is the obvious fix and is NOT available — hoisting the per-cell
+ * representative pick out of the per-score loop is the exact plan that kills ptabler (see the
+ * NOTE in the workflow). So the copies stay in the frame, where `companion()` and any saved chart
+ * state still resolve them, and only the picker is narrowed.
+ *
+ * Columns with no score in their domain — the region track, the parent residue, the fixed-cell
+ * flag, the axes — carry no index and are always kept.
+ */
+const scoreIndex = computed(
+  () => valueCol.value?.spec.domain?.["pl7.app/repertoire/landscapeScore"],
+);
+
+function metaColumnPredicate(spec: PColumnSpec): boolean {
+  const index = spec.domain?.["pl7.app/repertoire/landscapeScore"];
+  return index === undefined || index === scoreIndex.value;
+}
 
 /** Companion columns of the same score — matched on the score index, which is in their domain. */
 function companion(name: string) {
@@ -187,6 +214,7 @@ const fixedOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefined
       :p-frame="app.model.outputs.drillDownHeatmapPf"
       :defaultOptions="defaultOptions"
       :fixedOptions="fixedOptions"
+      :metaColumnPredicate="metaColumnPredicate"
       :defaultPalette="{ categorical: 'triadic' }"
       :readonly-inputs="['x', 'y', 'value']"
       :status-text="{

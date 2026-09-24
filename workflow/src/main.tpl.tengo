@@ -205,7 +205,15 @@ wf.body(func(args) {
 		},
 		annotations: {
 			"pl7.app/label": "Mutation",
-			"pl7.app/table/fontFamily": "monospace"
+			"pl7.app/table/fontFamily": "monospace",
+			// Hidden in tables. The drill-down table is already pinned to one mutationId by a
+			// model-side equality filter, so the axis renders one constant value in every row —
+			// and the section header above it says which. It cannot be hidden from the model:
+			// `ColumnsDisplayOptions` carries rules for columns only, and the table's axis meta
+			// is derived (an axis is shown iff a PRIMARY column declares it), which this axis is,
+			// being half of the linker. The axis spec's own annotation is the one lever that
+			// reaches it. Charts are unaffected: graph-maker reads no `pl7.app/table/*`.
+			"pl7.app/table/visibility": "hidden"
 		}
 	}
 
