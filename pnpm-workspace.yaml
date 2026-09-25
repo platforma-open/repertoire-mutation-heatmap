@@ -6,13 +6,13 @@ packages:
   - ui
   - workflow
 catalog:
-  "@platforma-sdk/model": 1.84.1
-  "@platforma-sdk/ui-vue": 1.84.1
+  "@platforma-sdk/model": 1.84.3
+  "@platforma-sdk/ui-vue": 1.84.3
   "@milaboratories/graph-maker": 1.9.0
   "@platforma-sdk/workflow-tengo": 6.12.1
   "@platforma-sdk/block-kind": 1.1.0
-  "@platforma-sdk/test": 1.84.1
-  "@platforma-sdk/block-tools": 2.16.3
+  "@platforma-sdk/test": 1.84.3
+  "@platforma-sdk/block-tools": 2.16.4
   "@platforma-sdk/tengo-builder": 4.1.4
   "@platforma-sdk/package-builder": 3.16.0
   "@milaboratories/ts-builder": 1.7.2
