@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.model
 
+## 1.1.6
+
+### Patch Changes
+
+- e4c2617: update sdk
+
 ## 1.1.5
 
 ### Patch Changes
