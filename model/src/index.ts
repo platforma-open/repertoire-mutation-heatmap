@@ -1,171 +1,166 @@
-import type { GraphMakerState } from "@milaboratories/graph-maker";
 import type {
-  ColumnRecipe,
   InferOutputsType,
   PColumnSpec,
   PFrameHandle,
-  PlRef,
   SUniversalPColumnId,
 } from "@platforma-sdk/model";
 import { kind } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.kind";
 import {
+  makeDrillDownChartState,
+  makeLandscapeChartState,
+  mapChartStates,
+  withEmptyNAValue,
+  withParentOnXAxis,
+  withRegionColoursReseeded,
+} from "./chart-state";
+import { dedupByLeafId, exactMatch, outputPColumns, poolSpecByRef } from "./render-utils";
+import { drillDownTableModel } from "./drill-down-table";
+import {
+  BROWSABLE_MUTATION,
+  LANDSCAPE_SCORE_INDEX,
+  LANDSCAPE_SCORE_REF,
+  LANDSCAPE_VALUE,
+  STATE_MATRIX,
+} from "./specs";
+import type {
+  BlockArgs,
+  BlockData,
+  BlockDataV1,
+  BlockDataV2,
+  BlockDataV3,
+  BlockDataV4,
+  LandscapePanel,
+} from "./types";
+
+// The model's public surface is the package root; the files are an internal split.
+export type * from "./types";
+export {
+  makeDrillDownChartState,
+  makeLandscapeChartState,
+  withParentOnXAxis,
+  withRegionColoursReseeded,
+} from "./chart-state";
+// `createPlDataTableV3`'s return type reaches into `Nil` from helpers, and TS cannot name it
+// from here without this — the same re-export every block building a table carries.
+export type * from "@milaboratories/helpers";
+import {
   BlockModelV3,
   ColumnsCollection,
+  createPlDataTableStateV2,
   DataModelBuilder,
   createPFrameForGraphs,
-  extractPObjectId,
 } from "@platforma-sdk/model";
 
-/** A selector `name`/`domain` given as a bare string normalizes to a REGEX matcher, so an
- *  exact name must be spelled out. `"pl7.app/frequency"` as a regex is unanchored and `.`
- *  matches any character, which would also admit `pl7.app/frequencyRatio`. */
-const exactMatch = (value: string) => [{ type: "exact" as const, value }];
-
-/** Collapse discovery hits to one recipe per storage column, first hit wins.
+/**
+ * The section href of one drill-down. The model builds the section list with it and the UI
+ * navigates with it, so the two cannot drift apart on the encoding — which they would, silently,
+ * the first time a designator needed escaping.
+ */
+/**
+ * `A5C · Bin score (5.5)` — the substitution and the score it is measured on.
  *
- *  The retired `findColumns()` keyed its result map on the leaf column, merging several
- *  reachability variants into one entry. `discover().getColumns()` returns one recipe PER
- *  variant instead, and the value these options carry is the leaf id — so without this,
- *  variants of one column become several dropdown entries sharing a single value. */
-function dedupByLeafId(recipes: ColumnRecipe[]): ColumnRecipe[] {
-  const seen = new Set<string>();
-  return recipes.filter((recipe) => {
-    const leaf = extractPObjectId(recipe.id);
-    if (seen.has(leaf)) return false;
-    seen.add(leaf);
-    return true;
-  });
+ * Derived from the produced columns rather than stored on the drill-down: a stored label goes
+ * stale when a score is renamed upstream, and would be missing entirely on any drill-down opened
+ * before it was introduced. Falls back to the bare designator before a run has produced columns.
+ */
+export function drillDownLabel(mutationId: string, scoreLabel: string | undefined): string {
+  return scoreLabel ? `${mutationId} · ${scoreLabel}` : mutationId;
 }
 
-// Profiler spec names used as join keys — must stay byte-identical to the names the profiler emits.
-const STATE_MATRIX = "pl7.app/repertoire/stateMatrix";
+/**
+ * The landscape charts the last run produced, in the user's score order.
+ *
+ * Shared by the `landscapePanels` output and by `.sections()`, which needs the same list to name
+ * one page per score — two derivations of "which charts exist" would drift the moment one of
+ * them changed.
+ */
+export function landscapePanelsFrom(
+  pCols: { spec: PColumnSpec }[] | undefined,
+): LandscapePanel[] | undefined {
+  if (pCols === undefined) return undefined;
+  const panels: LandscapePanel[] = [];
+  for (const col of pCols) {
+    if (col.spec.name !== LANDSCAPE_VALUE) continue;
+    const key = col.spec.annotations?.[LANDSCAPE_SCORE_REF];
+    // Pre-per-score-charts run: no ref, so no state key. Such a project shows the empty state
+    // until it is re-run.
+    if (key === undefined) continue;
+    panels.push({
+      key,
+      label: col.spec.annotations?.["pl7.app/label"] ?? "Score",
+      index: Number(col.spec.annotations?.[LANDSCAPE_SCORE_INDEX] ?? "0"),
+      spec: col.spec,
+    });
+  }
+  panels.sort((a, b) => a.index - b.index);
+  return panels;
+}
 
-// One such column per selected score. Must stay byte-identical to the workflow's import spec.
-const LANDSCAPE_VALUE = "pl7.app/repertoire/singleMutantValue";
-const LANDSCAPE_SCORE_REF = "pl7.app/repertoire/landscapeScoreRef";
-const LANDSCAPE_SCORE_INDEX = "pl7.app/repertoire/landscapeScoreIndex";
+/** The section href of one landscape page. */
+export function landscapeHref(scoreKey: string): `/?score=${string}` {
+  return `/?score=${encodeURIComponent(scoreKey)}`;
+}
 
-/** One mutation-landscape chart. */
-export type LandscapePanel = {
-  /** The score column's own id — the key of this chart's state in `singleMutantHeatmapStates`. */
-  key: string;
-  label: string;
-  /** Position in the user's score order. */
-  index: number;
-  spec: PColumnSpec;
-};
+/** `Landscape · Bin score (5.5)` — what the sidebar shows for one landscape page. */
+export function landscapeLabel(scoreLabel: string): string {
+  return `Landscape · ${scoreLabel}`;
+}
+
+/** score id -> display label, from the columns the last run produced. */
+export function scoreLabelsByKey(
+  pCols: { spec: PColumnSpec }[] | undefined,
+): Record<string, string> {
+  const labels: Record<string, string> = {};
+  for (const col of pCols ?? []) {
+    if (col.spec.name !== LANDSCAPE_VALUE) continue;
+    const key = col.spec.annotations?.[LANDSCAPE_SCORE_REF];
+    const label = col.spec.annotations?.["pl7.app/label"];
+    if (key !== undefined && label !== undefined) labels[key] = label;
+  }
+  return labels;
+}
+
+export function drillDownHref(mutationId: string): `/drilldown?m=${string}` {
+  return `/drilldown?m=${encodeURIComponent(mutationId)}`;
+}
 
 // Subtitle fallback when no dataset is selected yet.
 const NO_DATASET_LABEL = "No dataset selected";
 
-/** Workflow-facing args, derived from `BlockData`. */
-export type BlockArgs = {
-  /** Profiler state matrix `[variantKey, parentId, position] -> state`. */
-  stateMatrixRef: PlRef;
-  /** Parent to scope the whole plot to. Required — the args projection throws until it is set
-   *  (the UI auto-selects the first parent), so the workflow only ever runs single-parent. */
-  selectedParentId: string;
-  /**
-   * Ordered per-round frequency columns from the enrichment block (composition-enrichment view).
-   * Each is one round's `[variantKey] -> frequency` (`pl7.app/frequency`); `[0]` is the baseline round R0.
-   * Empty = composition-enrichment view off.
-   */
-  roundFrequencyRefs: SUniversalPColumnId[];
-  /**
-   * Fraction-space epsilon added to both sides of the composition ratio before log2,
-   * to keep emergent/vanished residues finite. Frequencies are in [0,1] (not counts),
-   * so this is a small value (default 1e-6), not a count pseudocount.
-   */
-  compositionEpsilon: number;
-  /**
-   * Per-variant score columns plotted in the mutation landscape, in the user's chosen
-   * order (which becomes the facet order). Empty = landscape off.
-   */
-  scoreRefs: SUniversalPColumnId[];
-};
-
-/** UI view state kept out of the workflow args. */
-export type BlockUiState = {
-  compositionHeatmapState: GraphMakerState;
-  /**
-   * Placeholder landscape chart, shown while no score column has produced data. Carries the
-   * page's empty state and its Settings drawer — on a fresh block, the only way into Settings.
-   */
-  singleMutantHeatmapState: GraphMakerState;
-  /**
-   * One landscape chart per score, keyed by the score column's id (not its position, so settings
-   * survive a reorder). The UI creates entries as runs produce new score columns; a dropped
-   * score's entry is left behind, and comes back into use if the score is picked again.
-   */
-  singleMutantHeatmapStates: Record<string, GraphMakerState>;
-  /**
-   * Which score's chart is on screen, as a key into `singleMutantHeatmapStates`. Undefined, or
-   * naming a score no longer selected, means the first chart.
-   */
-  selectedLandscapeScore?: string;
-};
-
-/** Data version `v1`: one faceted landscape chart, so one chart state. */
-export type BlockDataV1 = Omit<BlockData, "singleMutantHeatmapStates" | "selectedLandscapeScore">;
-
-/** Unified persisted data: workflow-relevant selections + UI view state. */
-export type BlockData = {
-  // Block label shown as the subtitle. `customBlockLabel` is the user-renamed override;
-  // `defaultBlockLabel` holds the selected dataset's name, snapshotted by the UI on selection
-  // (the `.subtitle` context is args-only and can't resolve the dataset label live).
-  customBlockLabel?: string;
-  defaultBlockLabel?: string;
-  stateMatrixRef?: PlRef;
-  /** Parent the plot is scoped to (UI auto-selects the first available on load). */
-  selectedParentId?: string;
-  /** Ordered per-round frequency columns; `[0]` = baseline R0. Empty = composition view off. */
-  roundFrequencyRefs: SUniversalPColumnId[];
-  /** Fraction-space epsilon for the composition ratio (default 1e-6). */
-  compositionEpsilon: number;
-  /** Ordered per-variant score columns for the mutation landscape. Empty = no map rendered. */
-  scoreRefs: SUniversalPColumnId[];
-} & BlockUiState;
-
-/**
- * Default state for a mutation-landscape chart. Used by `init` for the placeholder and by the UI
- * for each score a run produces, so the two look alike.
- *
- * @param currentTab `"settings"` opens the Settings drawer, `null` leaves it closed
- */
-export function makeLandscapeChartState(
-  title: string,
-  currentTab: "settings" | null,
-): GraphMakerState {
-  return {
-    title,
-    template: "heatmap",
-    currentTab,
-    // Cells are per-variant scores taken directly, not counts — GraphMaker's row z-score and
-    // transform would both distort them, and the values arrive already normalized upstream.
-    layersSettings: {
-      heatmap: {
-        normalizationDirection: null,
-        transform: null,
-      },
-    },
-    // Square cells, matching the enrichment map. No `facetColumns`: no facets left to lay out.
-    axesSettings: {
-      axisX: {
-        cellSize: 20,
-      },
-      axisY: {
-        hideAxisLabels: false,
-        cellSize: 20,
-      },
-    },
-  };
-}
-
 const dataModel = new DataModelBuilder({ kind })
   .from<BlockDataV1>("v1")
   // Nothing to carry over: the v1 state described a chart that no longer exists.
-  .migrate<BlockData>("v2", (v1) => ({ ...v1, singleMutantHeatmapStates: {} }))
+  .migrate<BlockDataV2>("v2", (v1) => ({ ...v1, singleMutantHeatmapStates: {} }))
+  .migrate<BlockDataV3>("v3", (v2) => ({
+    ...v2,
+    singleMutantHeatmapState: withEmptyNAValue(v2.singleMutantHeatmapState),
+    singleMutantHeatmapStates: Object.fromEntries(
+      Object.entries(v2.singleMutantHeatmapStates).map(([key, state]) => [
+        key,
+        withEmptyNAValue(state),
+      ]),
+    ),
+  }))
+  .migrate<BlockDataV4>("v4", (v3) => ({ ...v3, ...mapChartStates(v3, withParentOnXAxis) }))
+  // Per-position variant browsing, in one step. This feature was never released, so the several
+  // versions it passed through during development are not history anyone's project has to walk —
+  // v4 is the last shape that shipped.
+  //
+  // Adds the drill-down list and the one chart and table state they share, and drops the saved
+  // region colour mapping so the palette the region column now declares can seed it. Without
+  // that last part a chart keeps whatever mapping it built for itself, and a landscape and a
+  // drill-down go on colouring the same region differently.
+  .migrate<BlockData>("v5", (v4) => ({
+    ...v4,
+    drillDowns: [],
+    drillDownChartState: makeDrillDownChartState(),
+    drillDownTableState: createPlDataTableStateV2(),
+    ...mapChartStates(v4, withRegionColoursReseeded),
+  }))
   .init(() => ({
+    drillDowns: [],
+    drillDownChartState: makeDrillDownChartState(),
+    drillDownTableState: createPlDataTableStateV2(),
     roundFrequencyRefs: [],
     compositionEpsilon: 1e-6,
     scoreRefs: [],
@@ -200,6 +195,8 @@ const dataModel = new DataModelBuilder({ kind })
         },
         axisX: {
           cellSize: 20,
+          // Two-part labels ("32, D": position, then the residue it started as).
+          axisLabelsAngle: 45,
         },
         axisY: {
           hideAxisLabels: false,
@@ -277,7 +274,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   .output("scoreOptions", (ctx) => {
     const stateMatrixRef = ctx.data.stateMatrixRef;
     if (stateMatrixRef === undefined) return undefined;
-    const stateSpec = ctx.resultPool.getPColumnSpecByRef(stateMatrixRef);
+    const stateSpec = poolSpecByRef(ctx, stateMatrixRef);
     if (!stateSpec) return undefined;
 
     const anchors: Record<string, PColumnSpec> = { main: stateSpec };
@@ -332,7 +329,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   .output("roundFrequencyOptions", (ctx) => {
     const stateMatrixRef = ctx.data.stateMatrixRef;
     if (stateMatrixRef === undefined) return undefined;
-    const stateSpec = ctx.resultPool.getPColumnSpecByRef(stateMatrixRef);
+    const stateSpec = poolSpecByRef(ctx, stateMatrixRef);
     if (!stateSpec) return undefined;
 
     const matches = dedupByLeafId(
@@ -380,70 +377,63 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   // only the value column it is given. Present only when score columns are selected AND the
   // profiler emitted a mutation count (the workflow emits it conditionally).
   .outputWithStatus("singleMutantHeatmapPf", (ctx): PFrameHandle | undefined => {
-    try {
-      const pCols = ctx.outputs?.resolve("singleMutantHeatmapPf")?.getPColumns();
-      if (pCols === undefined) return undefined;
-      return createPFrameForGraphs(ctx, pCols);
-    } catch {
-      return undefined;
-    }
+    const pCols = outputPColumns(ctx, "singleMutantHeatmapPf");
+    if (pCols === undefined) return undefined;
+    return createPFrameForGraphs(ctx, pCols);
   })
   .output("singleMutantHeatmapPCols", (ctx) => {
-    try {
-      return ctx.outputs?.resolve("singleMutantHeatmapPf")?.getPColumns();
-    } catch {
-      return undefined;
-    }
+    return outputPColumns(ctx, "singleMutantHeatmapPf");
   })
 
   // One chart per score column the last run produced, in the user's score order. Read from the
   // produced columns, not `data.scoreRefs`: while the block is stale the two disagree, and the
   // columns are what is actually on screen.
-  .output("landscapePanels", (ctx): LandscapePanel[] | undefined => {
-    let pCols;
-    try {
-      pCols = ctx.outputs?.resolve("singleMutantHeatmapPf")?.getPColumns();
-    } catch {
-      return undefined;
-    }
-    if (pCols === undefined) return undefined;
+  .output("landscapePanels", (ctx): LandscapePanel[] | undefined =>
+    landscapePanelsFrom(outputPColumns(ctx, "singleMutantHeatmapPf")),
+  )
 
-    const panels: LandscapePanel[] = [];
-    for (const col of pCols) {
-      if (col.spec.name !== LANDSCAPE_VALUE) continue;
-      const key = col.spec.annotations?.[LANDSCAPE_SCORE_REF];
-      // Pre-per-score-charts run: no ref, so no state key. Such a project shows the empty state
-      // until it is re-run.
-      if (key === undefined) continue;
-      panels.push({
-        key,
-        label: col.spec.annotations?.["pl7.app/label"] ?? "Score",
-        index: Number(col.spec.annotations?.[LANDSCAPE_SCORE_INDEX] ?? "0"),
-        spec: col.spec,
-      });
-    }
-    panels.sort((a, b) => a.index - b.index);
-    return panels;
+  // --- Drill-down outputs (per-position variant browsing) ---
+
+  // Partner map: [mutationId, position, state] -> cellValue, one value column per score, plus
+  // the fixed-cell flag and the two position-keyed tracks. One frame serves every open
+  // drill-down — the chart pins `mutationId` to its own substitution.
+  .outputWithStatus("drillDownHeatmapPf", (ctx): PFrameHandle | undefined => {
+    const pCols = outputPColumns(ctx, "drillDownHeatmapPf");
+    if (pCols === undefined) return undefined;
+    return createPFrameForGraphs(ctx, pCols);
   })
+  .output("drillDownHeatmapPCols", (ctx) => {
+    return outputPColumns(ctx, "drillDownHeatmapPf");
+  })
+
+  // [mutationId] -> co-occurring variant count, present only for substitutions that HAVE a
+  // co-occurring variant. The UI enumerates this frame's axis to list what is worth browsing —
+  // which is exactly the set of cells a click will be allowed to open.
+  .output("browsableMutationsPf", (ctx) => {
+    const pCols = outputPColumns(ctx, "browsableMutationsPf");
+    if (pCols === undefined || pCols.length === 0) return undefined;
+    return ctx.createPFrame(pCols);
+  })
+  .output("browsableMutationsColId", (ctx) => {
+    return outputPColumns(ctx, "browsableMutationsPf")?.find(
+      (c) => c.spec.name === BROWSABLE_MUTATION,
+    )?.id;
+  })
+
+  // Table tab. The assembly lives in its own file: the axis-filter rule it turns on needs more
+  // explaining than it needs code.
+  .outputWithStatus("drillDownTable", (ctx) => drillDownTableModel(ctx))
 
   // Composition-enrichment heat map: per-round positional log2 fold change
   // `[round, parentId, position, state] -> log2FC`. Present only when round-frequency
   // inputs are selected (the workflow emits it conditionally).
   .outputWithStatus("compositionHeatmapPf", (ctx): PFrameHandle | undefined => {
-    try {
-      const pCols = ctx.outputs?.resolve("compositionHeatmapPf")?.getPColumns();
-      if (pCols === undefined) return undefined;
-      return createPFrameForGraphs(ctx, pCols);
-    } catch {
-      return undefined;
-    }
+    const pCols = outputPColumns(ctx, "compositionHeatmapPf");
+    if (pCols === undefined) return undefined;
+    return createPFrameForGraphs(ctx, pCols);
   })
   .output("compositionHeatmapPCols", (ctx) => {
-    try {
-      return ctx.outputs?.resolve("compositionHeatmapPf")?.getPColumns();
-    } catch {
-      return undefined;
-    }
+    return outputPColumns(ctx, "compositionHeatmapPf");
   })
 
   .output("isRunning", (ctx) => ctx.outputs?.getIsReadyOrError() === false)
@@ -456,14 +446,48 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   .subtitle((ctx) => ctx.data.customBlockLabel || ctx.data.defaultBlockLabel || NO_DATASET_LABEL)
 
   .sections((ctx) => {
-    // The landscape is unconditional and owns "/". It is the only always-listed section, so
-    // it is what a block with nothing selected yet shows — and the only way to reach Settings
-    // and pick a dataset. Its own empty state asks for the score columns.
-    const sections: { type: "link"; href: `/${string}`; label: string }[] = [
-      { type: "link", href: "/", label: "Single Mutation Landscape" },
-    ];
+    const pCols = outputPColumns(ctx, "singleMutantHeatmapPf");
+    const panels = landscapePanelsFrom(pCols) ?? [];
+
+    // A section is one line of text: no subtitle, no indentation, and a delimiter carries no
+    // label. Grouping is therefore the only way to say what a run of entries is, which is why
+    // every landscape entry repeats "Landscape". Rules go BETWEEN groups only — a leading one
+    // would sit directly under the block header, which already divides them.
+    const sections: (
+      | { type: "link"; href: `/${string}`; label: string }
+      | { type: "delimiter" }
+    )[] = [];
+
+    if (panels.length === 0) {
+      // Nothing produced yet. "/" is still listed, because it carries the empty state and its
+      // Settings drawer — on a fresh block it is the only way to pick a dataset at all.
+      sections.push({ type: "link", href: "/", label: "Single Mutation Landscape" });
+    } else {
+      // One page per score, rather than one page with a tab per score: a run can select many
+      // scores, and a tab strip stops being navigable long before a section list does.
+      for (const p of panels) {
+        sections.push({ type: "link", href: landscapeHref(p.key), label: landscapeLabel(p.label) });
+      }
+    }
+
+    // One per open drill-down, in the order they were opened. Read from `data`, so a section
+    // appears the moment a substitution is browsed into — no Run, and nothing goes stale.
+    const drillDowns = ctx.data.drillDowns ?? [];
+    if (drillDowns.length > 0) {
+      const scoreLabels = scoreLabelsByKey(pCols);
+      sections.push({ type: "delimiter" });
+      for (const d of drillDowns) {
+        sections.push({
+          type: "link",
+          href: drillDownHref(d.mutationId),
+          label: drillDownLabel(d.mutationId, scoreLabels[d.scoreKey]),
+        });
+      }
+    }
+
     // Needs a baseline + at least one comparison round (see workflow's hasComposition).
     if (ctx.data.roundFrequencyRefs.length >= 2) {
+      sections.push({ type: "delimiter" });
       sections.push({ type: "link", href: "/composition", label: "Enrichment Analysis" });
     }
     return sections;

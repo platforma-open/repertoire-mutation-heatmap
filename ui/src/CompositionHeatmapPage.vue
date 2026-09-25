@@ -35,9 +35,25 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
   if (regionCol) {
     options.push({ inputName: "annotationsX", selectedSource: regionCol.spec });
   }
+  // Parent residue as the second part of the X axis label rather than a track beneath it, so each
+  // column reads "32, D" — the position and the residue it started as. Position-keyed, and position
+  // is already the first X source, so the heatmap accepts it as an X source too.
   const parentCol = pCols.find((p) => p.spec.name === "pl7.app/repertoire/parentResidue");
   if (parentCol) {
-    options.push({ inputName: "annotationsX", selectedSource: parentCol.spec });
+    options.push({ inputName: "x", selectedSource: parentCol.spec });
+  }
+
+  // Outline the parent residue at each position — the unmutated reference every fold change is
+  // measured against — the way published deep-mutational-scanning figures mark it. The column is
+  // present only on the parent cells, so `subset` ("has a value") marks exactly those; it is not
+  // locked, so the user can clear it or point the Highlight at something else.
+  const parentFlagCol = pCols.find((p) => p.spec.name === "pl7.app/repertoire/isParentResidue");
+  if (parentFlagCol) {
+    options.push({
+      inputName: "highlight",
+      selectedSource: parentFlagCol.spec,
+      filterType: "subset",
+    });
   }
 
   return options;

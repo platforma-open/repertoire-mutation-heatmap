@@ -24,6 +24,9 @@ pframes := import("@platforma-sdk/workflow-tengo:pframes")
 pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
 pt := import("@platforma-sdk/workflow-tengo:pt")
 maps := import("@platforma-sdk/workflow-tengo:maps")
+json := import("json")
+units := import("@platforma-sdk/workflow-tengo:units")
+pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
 
 // Join keys must stay byte-identical to the profiler's emitted axis names.
 VARIANT_KEY_AXIS := "pl7.app/variantKey"
@@ -67,6 +70,13 @@ wf.prepare(func(args) {
 		name: "pl7.app/repertoire/mutationCount",
 		axes: [{ anchor: "main", idx: 0 }]
 	}, "mutationCount")
+	// Per-variant display label ("V-SYVZR"), keyed on the state matrix's variantKey axis (idx 0).
+	// The pair map's tooltip shows the variant, and a raw key identifies nothing to a reader.
+	// addMulti so a dataset without labels resolves to empty and the key is shown instead.
+	bb.addMulti({
+		name: "pl7.app/label",
+		axes: [{ anchor: "main", idx: 0 }]
+	}, "variantLabel")
 	// Per-variant score columns for the mutation landscape. Same shape as the round
 	// frequencies: ids come from the model's discover() (anchored on `main`), added without a
 	// query key and retrieved by the ref itself in the body.
@@ -89,6 +99,56 @@ wf.prepare(func(args) {
 	}
 })
 
+/**
+ * Exact row count of a parquet-partitioned p-column, or undefined when it cannot be known.
+ *
+ * Each part is a ParquetChunk resource whose own JSON carries `stats.numberOfRows`, so this
+ * reads metadata only — no parquet file is opened. Every other storage shape (Json, Binary,
+ * their partitioned forms) keeps per-part counts inside opaque blobs and returns undefined,
+ * as does any chunk whose stats are missing: a partial sum would under-request memory, which
+ * is the failure this exists to prevent.
+ */
+parquetRowCount := func(dataRes) {
+	if is_undefined(dataRes) {
+		return undefined
+	}
+	info := dataRes.info()
+	if is_undefined(info) || is_undefined(info.Type) ||
+		info.Type.Name != pConstants.RTYPE_P_COLUMN_DATA_PARQUET_PARTITIONED.Name {
+		return undefined
+	}
+	total := 0
+	for _, fld in dataRes.inputs() {
+		if !fld.isValueSet() {
+			return undefined
+		}
+		meta := fld.getValue().getDataAsJson()
+		if is_undefined(meta) || is_undefined(meta.stats) {
+			return undefined
+		}
+		rows := meta.stats.numberOfRows
+		if !is_int(rows) && !is_float(rows) {
+			return undefined
+		}
+		total += int(rows)
+	}
+	return total
+}
+
+// pt's own RAM formula (:pt.sizing), applied by hand to a volume pt cannot measure. Clamped to
+// the same 2 GiB floor and 256 GiB ceiling the auto-sizer uses, so this can only ever ask for
+// what the formula would have asked had the input been visible to it.
+ptRamFor := func(sizeBytes) {
+	ram := 2 * units.GiB + 6 * sizeBytes
+	if ram < 2 * units.GiB {
+		ram = 2 * units.GiB
+	}
+	if ram > 256 * units.GiB {
+		ram = 256 * units.GiB
+	}
+	return ram
+}
+
 wf.body(func(args) {
 	// No early bail-out on a missing value source: every view here is optional and guarded on
 	// its own inputs, so a run with only a dataset and a parent legitimately produces just the
@@ -110,6 +170,53 @@ wf.body(func(args) {
 	// Y-axis (state) label, alphabet-aware: residues for the aa matrix, bases for nt.
 	stateAxisLabel := (alphabet == "aminoacid") ? "Amino Acids" : "Nucleotides"
 
+	// The landscape's cell is (position, state). Its parent-residue cell holds a value only when
+	// the dataset has a WT variant: a single mutant differs from its parent, so no single mutant
+	// carries the parent residue at its own position. Marking that cell needs it to exist, so both cell axes are
+	// declared dense and graph-maker asks the engine for the full position x state grid, with an
+	// absent value wherever no single mutant covered the substitution. Identity is name + type +
+	// domain, so these annotated copies still join with the position-keyed annotation tracks.
+	densePositionAxisSpec := maps.deepMerge(positionAxisSpec, {
+		annotations: { "pl7.app/graph/isDenseAxis": "true" }
+	})
+	stateAxisSpecBase := {
+		name: "pl7.app/repertoire/state",
+		type: "String",
+		domain: {
+			"pl7.app/alphabet": alphabet
+		},
+		annotations: {
+			"pl7.app/label": stateAxisLabel,
+			"pl7.app/table/fontFamily": "monospace"
+		}
+	}
+	denseStateAxisSpec := maps.deepMerge(stateAxisSpecBase, {
+		annotations: { "pl7.app/graph/isDenseAxis": "true" }
+	})
+
+	// The substitution designator (`A5C`) the drill-down outputs are keyed on. One string axis
+	// rather than a (position, residue) pair, so a chart pins to one mutation with a single
+	// equality filter, and the same value is the section label and the query parameter.
+	mutationIdAxisSpec := {
+		name: "pl7.app/repertoire/mutationId",
+		type: "String",
+		domain: {
+			"pl7.app/alphabet": alphabet
+		},
+		annotations: {
+			"pl7.app/label": "Mutation",
+			"pl7.app/table/fontFamily": "monospace",
+			// Hidden in tables. The drill-down table is already pinned to one mutationId by a
+			// model-side equality filter, so the axis renders one constant value in every row —
+			// and the section header above it says which. It cannot be hidden from the model:
+			// `ColumnsDisplayOptions` carries rules for columns only, and the table's axis meta
+			// is derived (an axis is shown iff a PRIMARY column declares it), which this axis is,
+			// being half of the linker. The axis spec's own annotation is the one lever that
+			// reaches it. Charts are unaffected: graph-maker reads no `pl7.app/table/*`.
+			"pl7.app/table/visibility": "hidden"
+		}
+	}
+
 	// --- Shared frames ---
 	// Every PColumn is read straight through pframes-rs: pt.p.column emits a
 	// `read_frame` step, which is a lazy parquet scan (and the one read path ptabler
@@ -120,12 +227,37 @@ wf.body(func(args) {
 	// `distinctVariants x parentLength` rows, so on a DMS-scale run that round trip
 	// costs tens of GB of scratch and two extra full passes for no gain.
 	//
-	// No .mem()/.cpu(): pt sizes both from input volume when neither is set
-	// (ram = between(2 GiB + 4 x size, 2 GiB, 64 GiB), see workflow-tengo
-	// pt/workflow-run.tpl.tengo). An explicit request suppresses that formula, and
-	// the old fixed 16 GiB neither grew for a large run nor gave memory back on a
-	// small one.
-	ptWf := pt.workflow()
+	// RAM, sized from the state matrix's real row count.
+	//
+	// pt sizes a run from `f.size()`, which counts only inputs attached with `addFile()`. This
+	// workflow attaches none — every input is read through `pt.p.column` — so the measured volume
+	// is ZERO and the run receives exactly the 2 GiB floor, whatever the data. That is not a
+	// small error: the state matrix is `variants x parentLength` rows, ~118M on a 1.08M variant
+	// library, and it asked for the same 2 GiB as a 2M row one. It killed the step, and it killed
+	// it for this block before per-position browsing existed too.
+	//
+	// The volume pt cannot see is recoverable here. A parquet-partitioned p-column keeps one
+	// ParquetChunk resource per part, each carrying `stats.numberOfRows` in its own JSON — no
+	// parquet file is read to get it. Summing those gives the exact row count, and pt's own
+	// formula turns it into a request:
+	//
+	//     ram = 2 GiB + 6 x size     (:pt.sizing, size = uncompressed input bytes)
+	//
+	// Bytes per row is the one estimate left, and it is the stable half: a row is variantKey,
+	// parentId, position and state, ~26 B of text, and that barely moves between libraries. The
+	// row count is what swings — 50x between mutation limit 1 and 3 on the same data — and that
+	// is now measured rather than guessed.
+	STATE_MATRIX_BYTES_PER_ROW := 32
+	stateMatrixRows := parquetRowCount(stateCol.data)
+
+	ptWf := undefined
+	if is_undefined(stateMatrixRows) {
+		// Not parquet-partitioned, or a chunk without stats. Fall back to a flat request rather
+		// than to the 2 GiB floor, which is the value that fails.
+		ptWf = pt.workflow().mem(24 * units.GiB)
+	} else {
+		ptWf = pt.workflow().mem(ptRamFor(stateMatrixRows * STATE_MATRIX_BYTES_PER_ROW))
+	}
 
 	// Axes come back named by their spec, not by a header a builder assigns, so each
 	// is aliased here to the name the rest of this body already uses. Matching on the
@@ -217,6 +349,15 @@ wf.body(func(args) {
 	}
 	parentResDf.save("parentResidue.tsv")
 
+	// Per-cell parent marking for the landscape: [position, state] -> 1 at the one cell per
+	// position whose state IS the parent residue. Present only there, so GraphMaker's Highlight
+	// input filters it as a subset ("has a value") and outlines exactly those cells. These are
+	// the cells the densified grid supplies and the single-mutant data never does.
+	parentFlagLandscapeDf := parentResDf.
+		select(pt.col("position"), pt.col("parentResidue").alias("state")).
+		withColumns(pt.lit(1).alias("isParentResidue"))
+	parentFlagLandscapeDf.save("parentResidueFlagLandscape.tsv")
+
 	// --- Mutation landscape precalc (optional) ---
 	// The singleton cell mode: a cell holds the value of the ONE single-mutant variant carrying
 	// exactly that substitution, taken directly with no aggregation. The alternative would be a
@@ -231,7 +372,8 @@ wf.body(func(args) {
 	// (derived above from the full population) keeps only the position where the variant actually
 	// differs — exactly one row per variant.
 	//
-	// Cells with no covering single-mutant variant are ABSENT, never filled from a fallback.
+	// Cells with no covering single-mutant variant are ABSENT, never filled from a fallback. The
+	// parent cells are the one exception: they carry the WT variant's score, when there is one.
 	scoreRefs := args.scoreRefs
 	mutCountEntries := columns.getColumns("mutationCount")
 	hasLandscape := !is_undefined(scoreRefs) && len(scoreRefs) > 0 &&
@@ -239,18 +381,224 @@ wf.body(func(args) {
 	// Filled by the precalc, read by the import section after ptWf.run() — hence declared out here.
 	scoreMeta := []
 	if hasLandscape {
-		singleMutants := ptWf.frame(pt.p.column("mutCount", mutCountEntries[0])).
-			select(pt.axis(VARIANT_KEY_AXIS).alias("variantKey"), pt.col("mutCount")).
+		// [variantKey] -> mutCount, for every variant. Shared by the landscape's single-mutant
+		// predicate and by the drill-down precalc below, so the column is read once.
+		mutCounts := ptWf.frame(pt.p.column("mutCount", mutCountEntries[0])).
+			select(pt.axis(VARIANT_KEY_AXIS).alias("variantKey"), pt.col("mutCount"))
+
+		singleMutants := mutCounts.
 			filter(pt.col("mutCount").eq(pt.lit(1))).
 			select(pt.col("variantKey"))
 
-		// [variantKey, parentId, position, state] — one row per single-mutant variant, at the
-		// position/residue of its own substitution. parentId is dropped again below.
-		mutCells := smDf.
-			join(singleMutants, { on: "variantKey", how: "inner" }).
+		// One row per MUTATION of EVERY variant — the diff against the per-position
+		// parent residue described above, without the single-mutant predicate. The landscape
+		// takes the single-mutant subset of it; the drill-down maps take the rest.
+		//
+		// `mutationId` is the substitution's designator (`A5C`: parent residue, position, new
+		// residue), and the key everything in the drill-down hangs off. One string axis, so a
+		// chart pins to one mutation with a single equality filter and the UI reuses the same
+		// value as the section label and the query parameter.
+		// No mutation-count bound. One was carried for a while on the theory that expanding every
+		// variant is what killed the step; it was not. The step was dying because the RAM request
+		// measured zero (see the pt.workflow comment above) and always came back at the 2 GiB
+		// floor — at limit 1 as much as at limit 3. With that fixed the bound only cost spec
+		// fidelity: triples and beyond belong in the Table tab, and a co-occurring variant is any
+		// variant with more than one mutation, not only a double.
+		//
+		// The row count here is the sum of mutation counts across variants, which stays far below
+		// the `variants x positions` matrix this reads from.
+		allMutCells := smDf.
 			join(parentResDf, { on: "position", how: "inner" }).
 			filter(pt.col("state").neq(pt.col("parentResidue"))).
+			withColumns(
+				pt.concatStr([
+					pt.col("parentResidue"),
+					pt.col("position").cast("String"),
+					pt.col("state")
+				]).alias("mutationId")
+			).
+			select(
+				pt.col("variantKey"),
+				pt.col("parentId"),
+				pt.col("position"),
+				pt.col("state"),
+				pt.col("mutationId")
+			)
+
+		// [variantKey, parentId, position, state, mutationId] — one row per single-mutant
+		// variant, at the position/residue of its own substitution.
+		singleMutCells := allMutCells.join(singleMutants, { on: "variantKey", how: "inner" })
+
+		// parentId is dropped again below; kept here so the landscape select is unchanged.
+		mutCells := singleMutCells.
 			select(pt.col("variantKey"), pt.col("parentId"), pt.col("position"), pt.col("state"))
+
+		// The parent cell at each position carries the WT variant's own score: a variant with
+		// zero mutations holds the parent residue everywhere, so its state-matrix rows are
+		// exactly the parent cells.
+		wtMutants := mutCounts.
+			filter(pt.col("mutCount").eq(pt.lit(0))).
+			select(pt.col("variantKey"))
+		wtCells := smDf.
+			join(wtMutants, { on: "variantKey", how: "inner" }).
+			select(pt.col("variantKey"), pt.col("parentId"), pt.col("position"), pt.col("state"))
+		landscapeCells := pt.concat([mutCells, wtCells])
+
+		// --- Drill-down precalc ---
+		// Everything a click needs, computed once for EVERY cell. A click then filters data the
+		// block already holds, so it opens instantly and needs no Run — which is what keeps the
+		// open sections out of args and stops the block going stale when one is opened.
+		//
+		// All three outputs are bounded by the variants actually observed, not by the size of the
+		// grid. A library with no multi-mutants produces an empty pair map and costs nothing.
+
+		// Co-occurring variants per cell: how many variants carrying this substitution are
+		// multi-mutants. Rides the landscape frame on the cell axes, so it reads in the tooltip
+		// beside the score and answers "would a drill-down hold anything?" before a click is spent.
+		//
+		// Left-joined onto the single-mutant cells and null-filled, so a cell the user can see but
+		// cannot drill into reads a definite `0` rather than an absent tooltip line. Cells with no
+		// single mutant at all have no row here and none on the map either.
+		// One row per (mutation, co-occurring variant carrying it) — the base both counts read.
+		// Any mutation count above one, so a substitution carried only by triples still counts as
+		// browsable and still opens a table, even though the partner map draws doubles alone.
+		coOccurringCells := allMutCells.
+			join(mutCounts, { on: "variantKey", how: "inner" }).
+			filter(pt.col("mutCount").gt(pt.lit(1)))
+
+		coOccurrence := coOccurringCells.
+			groupBy("position", "state").
+			agg(pt.col("variantKey").count().alias("coOccurringVariants"))
+
+		// The same count keyed by the designator instead of the cell: [mutationId] -> Int, and
+		// only for mutations that HAVE a co-occurring variant. The UI enumerates this axis to
+		// build the list of substitutions worth browsing, which is exactly the set of cells a
+		// click will be allowed to open.
+		coOccurringCells.
+			groupBy("mutationId").
+			agg(pt.col("variantKey").count().alias("coOccurringVariants")).
+			save("browsableMutations.tsv")
+
+		// Collapse AFTER the join, not before. Folding to the cell grid first and joining the
+		// count onto it reads better and does less work, but ptabler dies on the resulting plan
+		// (see the note above the drill-down cell set) — so this keeps the shape that runs.
+		singleMutCells.
+			select(pt.col("position"), pt.col("state")).
+			join(coOccurrence, { on: ["position", "state"], how: "left" }).
+			withColumns(pt.col("coOccurringVariants").fillNull(pt.lit(0)).alias("coOccurringVariants")).
+			sort(["position", "state"]).
+			groupBy("position", "state").
+			agg(pt.col("coOccurringVariants").first().alias("coOccurringVariants")).
+			save("coOccurringVariants.tsv")
+
+		// Mutation -> variant membership: every variant carrying each substitution, at any
+		// mutation count. The Table tab's primary column, annotated as a linker so table
+		// discovery hops from it to the variant-keyed columns in the result pool — the block
+		// exports the hop, not copies of the upstream data.
+		allMutCells.
+			select(pt.col("variantKey"), pt.col("mutationId")).
+			withColumns(pt.lit(1).alias("carriesMutation")).
+			save("mutationVariantLink.tsv")
+
+		// Partner pair map: for each fixed mutation, the second substitution of every double
+		// mutant carrying it. Self-join over the doubles on variantKey, keeping both directions
+		// so each member of a pair can be the fixed one.
+		doubleMutants := mutCounts.
+			filter(pt.col("mutCount").eq(pt.lit(2))).
+			select(pt.col("variantKey"))
+
+		doubleCells := allMutCells.join(doubleMutants, { on: "variantKey", how: "inner" })
+
+		// The partner side is rebuilt from the state matrix rather than projected out of
+		// `doubleCells`, so the two sides of the join below are independent lineages.
+		//
+		// Joining one lazy node to a projection of ITSELF is the only construct in this workflow
+		// that the single-mutant libraries never exercised — with no double mutants that branch
+		// is empty and never really runs — and it is the shape present in every failing run.
+		// Re-deriving costs one more scan of an already-reduced frame; it buys a plain two-input
+		// join over a self-join.
+		partnerCells := smDf.
+			join(doubleMutants, { on: "variantKey", how: "inner" }).
+			join(parentResDf, { on: "position", how: "inner" }).
+			filter(pt.col("state").neq(pt.col("parentResidue"))).
+			withColumns(
+				pt.concatStr([
+					pt.col("parentResidue"),
+					pt.col("position").cast("String"),
+					pt.col("state")
+				]).alias("partnerMutation")
+			).
+			select(
+				pt.col("variantKey"),
+				pt.col("position").alias("partnerPosition"),
+				pt.col("state").alias("partnerState"),
+				pt.col("partnerMutation")
+			)
+
+		pairCells := doubleCells.
+			select(pt.col("variantKey"), pt.col("mutationId")).
+			join(partnerCells, { on: "variantKey", how: "inner" }).
+			filter(pt.col("mutationId").neq(pt.col("partnerMutation"))).
+			select(
+				pt.col("mutationId"),
+				pt.col("partnerPosition").alias("position"),
+				pt.col("partnerState").alias("state"),
+				pt.col("partnerMutation"),
+				pt.col("variantKey")
+			)
+
+		// The fixed mutation is drawn too, in its own cell, carrying the singleton's own measured
+		// score — the reference every pair is read against. Concatenated into the same frame so
+		// one value column serves both, and flagged separately below so the chart can outline it.
+		// `partnerMutation` is materialised before the projection rather than selected as a
+		// second reference to `mutationId`. Naming one source column twice in a single select is
+		// legal but needless, and this path has been hard enough to debug without it.
+		fixedOwnCells := singleMutCells.
+			withColumns(pt.col("mutationId").alias("partnerMutation")).
+			select(
+				pt.col("mutationId"),
+				pt.col("position"),
+				pt.col("state"),
+				pt.col("partnerMutation"),
+				pt.col("variantKey")
+			)
+
+		drillDownCells := pt.concat([pairCells, fixedOwnCells])
+
+		// The variant's display label, carried ALONGSIDE the key rather than replacing it. The
+		// per-score join below keys on `variantKey`, so overwriting it silently matches nothing
+		// and every pair file comes out empty.
+		//
+		// Left join + fillNull rather than an inner join: a variant the label column does not
+		// cover keeps its key as its label and stays in the map, instead of vanishing from it.
+		variantLabelEntries := columns.getColumns("variantLabel")
+		if is_undefined(variantLabelEntries) || len(variantLabelEntries) == 0 {
+			drillDownCells = drillDownCells.
+				withColumns(pt.col("variantKey").alias("variantLabel"))
+		} else {
+			variantLabels := ptWf.frame(pt.p.column("variantLabel", variantLabelEntries[0])).select(
+				pt.axis(VARIANT_KEY_AXIS).alias("variantKey"),
+				pt.col("variantLabel").cast("String").alias("variantLabel")
+			)
+			drillDownCells = drillDownCells.
+				join(variantLabels, { on: "variantKey", how: "left" }).
+				withColumns(pt.col("variantLabel").fillNull(pt.col("variantKey")).alias("variantLabel"))
+		}
+
+		// NOTE, do not "optimise" this the obvious way. Picking the representative variant per
+		// cell once, outside the per-score loop, is score-independent and removes N-1 sorts —
+		// but ptabler exits with a signal (code -1, no traceback) on the plan that produces,
+		// even on a few thousand rows. The same happened to the co-occurrence count when its
+		// aggregation was folded ahead of the join. Both are reverted here; whatever the plan
+		// builder dislikes about a shared sort/groupBy node reused by several consumers has to
+		// be understood before this is tried again.
+
+		// [mutationId, position, state] -> 1 on the fixed cell only, so GraphMaker's Highlight
+		// input outlines it as a subset — the same mechanism as the parent-residue mark above.
+		singleMutCells.
+			select(pt.col("mutationId"), pt.col("position"), pt.col("state")).
+			withColumns(pt.lit(1).alias("isFixedMutation")).
+			save("drillDownFixedFlag.tsv")
 
 		// One saved frame per score, NOT one stacked column under a shared `score` axis. A heatmap
 		// chart has exactly one colour scale — miplots4 takes the value extent across all facets
@@ -280,7 +628,7 @@ wf.body(func(args) {
 			// No parentId: already scoped to one parent, so the axis would be constant — and
 			// GraphMaker demands every axis be consumed by an input, which put a one-choice
 			// "Show for" selector above the plot.
-			mutCells.
+			landscapeCells.
 				join(sDf, { on: "variantKey", how: "inner" }).
 				select(
 					pt.col("position"),
@@ -295,11 +643,40 @@ wf.body(func(args) {
 				agg(pt.col("scoreValue").first().alias("cellValue")).
 				save(scoreFile)
 
+			// The drill-down carries the score whose map was clicked, so it never silently
+			// changes what it is measuring — hence one pair frame per score, keyed the same way
+			// as the landscape's. Same one-row-per-cell guarantee: within a fixed mutation a
+			// partner cell is one double mutant, so `first` IS that variant's value.
+			// One row per cell, per score. The sort makes `first` deterministic where a library
+			// encodes the same pair under two variant keys.
+			pairFile := "drillDownPairs_" + string(i) + ".tsv"
+			drillDownCells.
+				join(sDf, { on: "variantKey", how: "inner" }).
+				select(
+					pt.col("mutationId"),
+					pt.col("position"),
+					pt.col("state"),
+					pt.col("partnerMutation"),
+					pt.col("variantKey"),
+					pt.col("variantLabel"),
+					pt.col("scoreValue").cast("Double").alias("scoreValue")
+				).
+				sort(["mutationId", "position", "state", "variantKey"]).
+				groupBy("mutationId", "position", "state").
+				agg(
+					pt.col("scoreValue").first().alias("cellValue"),
+					pt.col("partnerMutation").cast("String").first().alias("partnerMutation"),
+					// The label is what the tooltip shows; the key only ever served the join.
+					pt.col("variantLabel").cast("String").first().alias("variantKey")
+				).
+				save(pairFile)
+
 			scoreMeta = scoreMeta + [{
 				index: i,
 				label: scoreLabel,
 				ref: ref,
-				file: scoreFile
+				file: scoreFile,
+				pairFile: pairFile
 			}]
 		}
 	}
@@ -393,6 +770,20 @@ wf.body(func(args) {
 			select(pt.col("round"), pt.col("parentId"), pt.col("position"), pt.col("state"), pt.col("log2fc"))
 
 		compDf.save("compositionHeatmap.tsv")
+
+		// Per-cell flag marking the parent residue at each position, for GraphMaker's Highlight
+		// input: the cell whose state IS the parent is outlined, the rest are not. Keyed
+		// [parentId, position, state] — a subset of the composition cell's axes, so every round
+		// gets the same marking from one column.
+		//
+		// A SUBSET column: only the parent cells are present, and a cell absent from it reads as
+		// null after the join, which is what `pl7.app/isSubset` tells GraphMaker to filter on.
+		// The same grid the cells come from, so a marked cell always has a cell to mark.
+		parentFlagDf := cells.join(parentResDf, { on: "position", how: "inner" }).
+			filter(pt.col("state").eq(pt.col("parentResidue"))).
+			withColumns(pt.lit(1).alias("isParentResidue")).
+			select(pt.col("parentId"), pt.col("position"), pt.col("state"), pt.col("isParentResidue"))
+		parentFlagDf.save("parentResidueFlag.tsv")
 	}
 
 	ptResult := ptWf.run()
@@ -420,7 +811,29 @@ wf.body(func(args) {
 						name: "pl7.app/repertoire/regionAnnotation",
 						valueType: "String",
 						annotations: {
-							"pl7.app/label": "Region"
+							"pl7.app/label": "Region",
+							// Pin each region to a colour, rather than letting each chart pick.
+							//
+							// Without this, graph-maker seeds a categorical mapping ONCE, from the
+							// values on screen when the mapping is first created, and never
+							// reasserts it. A landscape sees every position and gets the values in
+							// sorted order; a drill-down draws one mutation's sparse partner map
+							// and gets whatever surfaced first. The same region then reads green on
+							// one chart and purple on the other, which is worse than arbitrary —
+							// it invites the reader to compare two pictures that do not agree.
+							//
+							// Indices follow the sorted order the landscape already lands on, so
+							// nothing about it changes: CDRs take the first triadic triple, the
+							// frameworks the second. A run whose scheme subdivides a region emits
+							// names not listed here (CDR2_N, Graft); those still fall back to
+							// per-chart assignment, and only for the extra names.
+							"pl7.app/graph/palette": string(json.encode({
+								name: "triadic",
+								mapping: {
+									CDR1: 0, CDR2: 1, CDR3: 2,
+									FR1: 3, FR2: 4, FR3: 5, FR4: 6
+								}
+							}))
 						}
 					}
 				}],
@@ -474,21 +887,8 @@ wf.body(func(args) {
 				"tsv",
 				{
 					axes: [
-						{ column: "position", spec: positionAxisSpec },
-						{
-							column: "state",
-							spec: {
-								name: "pl7.app/repertoire/state",
-								type: "String",
-								domain: {
-									"pl7.app/alphabet": alphabet
-								},
-								annotations: {
-									"pl7.app/label": stateAxisLabel,
-									"pl7.app/table/fontFamily": "monospace"
-								}
-							}
-						}
+						{ column: "position", spec: densePositionAxisSpec },
+						{ column: "state", spec: denseStateAxisSpec }
 					],
 					columns: [{
 						column: "cellValue",
@@ -532,7 +932,273 @@ wf.body(func(args) {
 		for k, v in parentCols {
 			lsPf.add("parent/" + k, trace.inject(v.spec), v.data)
 		}
+		// Parent-residue marking, [position, state] -> 1 on the parent cell only. Its axes are
+		// the cell's own, so GraphMaker accepts it as a per-cell source for Highlight; the
+		// non-dense copies are deliberate, since this column has no holes to fill.
+		parentFlagLsCols := xsv.importFile(
+			ptResult.getFile("parentResidueFlagLandscape.tsv"),
+			"tsv",
+			{
+				axes: [
+					{ column: "position", spec: positionAxisSpec },
+					{ column: "state", spec: stateAxisSpecBase }
+				],
+				columns: [{
+					column: "isParentResidue",
+					spec: {
+						name: "pl7.app/repertoire/isParentResidue",
+						valueType: "Int",
+						domain: {
+							"pl7.app/alphabet": alphabet
+						},
+						annotations: {
+							"pl7.app/label": (alphabet == "aminoacid") ? "Is parent AA" : "Is parent NT",
+							// Present-or-absent, not a number: GraphMaker's Highlight input then
+							// defaults to the subset filter instead of asking for a range.
+							"pl7.app/isSubset": "true"
+						}
+					}
+				}],
+				storageFormat: "Parquet",
+				partitionKeyLength: 0
+			},
+			{ splitDataAndSpec: true }
+		)
+		for k, v in parentFlagLsCols {
+			lsPf.add("parentFlag/" + k, trace.inject(v.spec), v.data)
+		}
+		// Co-occurring variant count, [position, state] -> Int on the same cell axes as the
+		// scores. The UI puts it in the tooltip basket, so hovering answers whether a cell has
+		// anything to drill into before the click is spent. Non-dense like the parent flag: it
+		// carries a row for exactly the cells the map draws, and a definite 0 where there is
+		// nothing to browse.
+		coOccurrenceCols := xsv.importFile(
+			ptResult.getFile("coOccurringVariants.tsv"),
+			"tsv",
+			{
+				axes: [
+					{ column: "position", spec: positionAxisSpec },
+					{ column: "state", spec: stateAxisSpecBase }
+				],
+				columns: [{
+					column: "coOccurringVariants",
+					spec: {
+						name: "pl7.app/repertoire/coOccurringVariants",
+						valueType: "Int",
+						domain: {
+							"pl7.app/alphabet": alphabet
+						},
+						annotations: {
+							"pl7.app/label": "Co-occurring variants"
+						}
+					}
+				}],
+				storageFormat: "Parquet",
+				partitionKeyLength: 0
+			},
+			{ splitDataAndSpec: true }
+		)
+		for k, v in coOccurrenceCols {
+			lsPf.add("coOccurrence/" + k, trace.inject(v.spec), v.data)
+		}
 		outputs.singleMutantHeatmapPf = pframes.exportFrame(lsPf.build())
+
+		// --- Drill-down import + export ---
+		// Partner map: [mutationId, position, state] -> cellValue, one value column per score.
+		// The chart pins mutationId to the clicked substitution and draws position x state, so
+		// each cell is the partner of a double mutant; the fixed mutation sits in its own cell,
+		// outlined by the flag column.
+		ddPf := pframes.pFrameBuilder()
+		for m in scoreMeta {
+			ddCols := xsv.importFile(
+				ptResult.getFile(m.pairFile),
+				"tsv",
+				{
+					axes: [
+						{ column: "mutationId", spec: mutationIdAxisSpec },
+						// Dense, like the landscape's: the partner map otherwise spans only the
+						// handful of positions that happen to carry a pair, and the region band
+						// under it shrinks to those, so the reader loses where in the parent they
+						// are looking. Dense makes graph-maker ask for the full position x state
+						// grid, with no value wherever no pair was observed.
+						{ column: "position", spec: densePositionAxisSpec },
+						{ column: "state", spec: denseStateAxisSpec }
+					],
+					columns: [
+						{
+							column: "cellValue",
+							spec: {
+								name: "pl7.app/repertoire/pairMutantValue",
+								valueType: "Double",
+								domain: {
+									"pl7.app/alphabet": alphabet,
+									// Same reason as the landscape: every score column shares name
+									// and axes, so identity needs one differing key.
+									"pl7.app/repertoire/landscapeScore": string(m.index)
+								},
+								annotations: {
+									"pl7.app/label": m.label,
+									"pl7.app/isScore": "true",
+									// The UI matches a drill-down chart to its score on this, the
+									// same annotation the landscape charts are keyed on.
+									"pl7.app/repertoire/landscapeScoreRef": m.ref,
+									"pl7.app/repertoire/landscapeScoreIndex": string(m.index)
+								}
+							}
+						},
+						{
+							column: "partnerMutation",
+							spec: {
+								name: "pl7.app/repertoire/partnerMutation",
+								valueType: "String",
+								domain: {
+									"pl7.app/alphabet": alphabet,
+									"pl7.app/repertoire/landscapeScore": string(m.index)
+								},
+								annotations: {
+									"pl7.app/label": "Partner mutation",
+									"pl7.app/table/fontFamily": "monospace"
+								}
+							}
+						},
+						{
+							column: "variantKey",
+							spec: {
+								name: "pl7.app/repertoire/pairVariantKey",
+								valueType: "String",
+								domain: {
+									"pl7.app/alphabet": alphabet,
+									"pl7.app/repertoire/landscapeScore": string(m.index)
+								},
+								annotations: {
+									"pl7.app/label": "Variant",
+									"pl7.app/table/fontFamily": "monospace"
+								}
+							}
+						}
+					],
+					storageFormat: "Parquet",
+					partitionKeyLength: 0
+				},
+				{ splitDataAndSpec: true }
+			)
+			for k, v in ddCols {
+				ddPf.add("pair" + string(m.index) + "/" + k, trace.inject(v.spec), v.data)
+			}
+		}
+		// The fixed mutation's own cell, present only there, so Highlight outlines exactly it.
+		ddFlagCols := xsv.importFile(
+			ptResult.getFile("drillDownFixedFlag.tsv"),
+			"tsv",
+			{
+				axes: [
+					{ column: "mutationId", spec: mutationIdAxisSpec },
+					{ column: "position", spec: positionAxisSpec },
+					{ column: "state", spec: stateAxisSpecBase }
+				],
+				columns: [{
+					column: "isFixedMutation",
+					spec: {
+						name: "pl7.app/repertoire/isFixedMutation",
+						valueType: "Int",
+						domain: {
+							"pl7.app/alphabet": alphabet
+						},
+						annotations: {
+							"pl7.app/label": "Is fixed mutation",
+							// Present-or-absent, so Highlight defaults to the subset filter.
+							"pl7.app/isSubset": "true"
+						}
+					}
+				}],
+				storageFormat: "Parquet",
+				partitionKeyLength: 0
+			},
+			{ splitDataAndSpec: true }
+		)
+		for k, v in ddFlagCols {
+			ddPf.add("fixedFlag/" + k, trace.inject(v.spec), v.data)
+		}
+		// Same position-keyed tracks as the landscape — the partner map shares the position axis
+		// and the selected parent, so they align cell for cell.
+		if hasRegion {
+			for k, v in regionCols {
+				ddPf.add("region/" + k, trace.inject(v.spec), v.data)
+			}
+		}
+		for k, v in parentCols {
+			ddPf.add("parent/" + k, trace.inject(v.spec), v.data)
+		}
+		outputs.drillDownHeatmapPf = pframes.exportFrame(ddPf.build())
+
+		// Mutation -> variant membership, [mutationId, variantKey] -> 1, exported on its own.
+		// variantKey sits at axis 0: a linker is matched positionally, and the columns the table
+		// reaches through it are variant-keyed. Annotated as a linker so table discovery makes
+		// the hop instead of offering the column itself.
+		linkCols := xsv.importFile(
+			ptResult.getFile("mutationVariantLink.tsv"),
+			"tsv",
+			{
+				axes: [
+					{ column: "variantKey", spec: stateSpec.axesSpec[0] },
+					{ column: "mutationId", spec: mutationIdAxisSpec }
+				],
+				columns: [{
+					column: "carriesMutation",
+					spec: {
+						name: "pl7.app/repertoire/mutationVariantLink",
+						valueType: "Int",
+						domain: {
+							"pl7.app/alphabet": alphabet
+						},
+						annotations: {
+							"pl7.app/label": "Carries mutation",
+							"pl7.app/isLinkerColumn": "true"
+						}
+					}
+				}],
+				storageFormat: "Parquet",
+				partitionKeyLength: 0
+			},
+			{ splitDataAndSpec: true }
+		)
+		linkPf := pframes.pFrameBuilder()
+		for k, v in linkCols {
+			linkPf.add("link/" + k, trace.inject(v.spec), v.data)
+		}
+		outputs.mutationVariantLinkPf = pframes.exportFrame(linkPf.build())
+
+		// Browsable mutations, [mutationId] -> co-occurring variant count. Its own frame so the
+		// UI can enumerate the axis (getUniqueSourceValuesWithLabels needs a frame and a column
+		// id) without pulling in the pair map.
+		browsableCols := xsv.importFile(
+			ptResult.getFile("browsableMutations.tsv"),
+			"tsv",
+			{
+				axes: [{ column: "mutationId", spec: mutationIdAxisSpec }],
+				columns: [{
+					column: "coOccurringVariants",
+					spec: {
+						name: "pl7.app/repertoire/browsableMutation",
+						valueType: "Int",
+						domain: {
+							"pl7.app/alphabet": alphabet
+						},
+						annotations: {
+							"pl7.app/label": "Co-occurring variants"
+						}
+					}
+				}],
+				storageFormat: "Parquet",
+				partitionKeyLength: 0
+			},
+			{ splitDataAndSpec: true }
+		)
+		browsablePf := pframes.pFrameBuilder()
+		for k, v in browsableCols {
+			browsablePf.add("browsable/" + k, trace.inject(v.spec), v.data)
+		}
+		outputs.browsableMutationsPf = pframes.exportFrame(browsablePf.build())
 	}
 
 	// --- Composition heat map import + export (optional) ---
@@ -592,9 +1258,60 @@ wf.body(func(args) {
 			},
 			{ splitDataAndSpec: true }
 		)
+		// Parent-residue marking, [parentId, position, state] -> 1 for the parent cell only.
+		// Absent everywhere else, so the Highlight input's subset filter outlines exactly those
+		// cells. Shares parentId / position / state with the value column, so GraphMaker accepts
+		// it as a per-cell source.
+		parentFlagCols := xsv.importFile(
+			ptResult.getFile("parentResidueFlag.tsv"),
+			"tsv",
+			{
+				axes: [
+					{ column: "parentId", spec: parentAxisSpec },
+					{ column: "position", spec: positionAxisSpec },
+					{
+						column: "state",
+						spec: {
+							name: "pl7.app/repertoire/state",
+							type: "String",
+							domain: {
+								"pl7.app/alphabet": alphabet
+							},
+							annotations: {
+								"pl7.app/label": stateAxisLabel,
+								"pl7.app/table/fontFamily": "monospace"
+							}
+						}
+					}
+				],
+				columns: [{
+					column: "isParentResidue",
+					spec: {
+						name: "pl7.app/repertoire/isParentResidue",
+						valueType: "Int",
+						domain: {
+							"pl7.app/alphabet": alphabet
+						},
+						annotations: {
+							"pl7.app/label": (alphabet == "aminoacid") ? "Is parent AA" : "Is parent NT",
+							// Present-or-absent, not a number: GraphMaker's Highlight input then
+							// defaults to the subset filter instead of asking for a range.
+							"pl7.app/isSubset": "true"
+						}
+					}
+				}],
+				storageFormat: "Parquet",
+				partitionKeyLength: 0
+			},
+			{ splitDataAndSpec: true }
+		)
+
 		compPf := pframes.pFrameBuilder()
 		for k, v in compCols {
 			compPf.add(k, trace.inject(v.spec), v.data)
+		}
+		for k, v in parentFlagCols {
+			compPf.add("parentFlag/" + k, trace.inject(v.spec), v.data)
 		}
 		// Same position-keyed region + parent-residue tracks as the state heat map — the
 		// composition plot shares the position (X) axis and the selected parent, so they align.
