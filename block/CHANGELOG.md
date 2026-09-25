@@ -1,5 +1,196 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.block
 
+## 1.1.6
+
+### Patch Changes
+
+- 3321e54: MILAB-6876: let only the newest browsable-mutation enumeration win
+
+  The landscape enumerates which substitutions are worth browsing into, asynchronously, and reruns it
+  whenever a run finishes or the selected parent changes. Two requests could be in flight at once,
+  and the older resolving last left its answer standing for a landscape it no longer described — a
+  click either opening a browser holding nothing, or refused on a substitution that does have
+  variants. Each request now takes a sequence number and writes only while it is still the newest.
+
+- f5fbefe: MILAB-6876: no table placeholder when a drill-down is opened
+
+  Opening the Table tab showed the not-ready placeholder — "Select score columns in Settings, then
+  Run" — for as long as a model round trip takes, on a block where scores were plainly selected. It
+  appeared on the first drill-down opened, went away for every one after it, and came back once all
+  of them were closed.
+
+  That overlay is what a freshly mounted grid shows until its first rows arrive, and the grid mounts
+  on every switch to the Table tab. What varied was how long the rows took: `activeDrillDown` was a
+  precondition for the table existing at all, so whenever it was unset the model returned nothing and
+  the table was torn down — output, columns and data source — and the next drill-down paid a cold
+  rebuild. With one already open the model recomputed from one live table to another and the rows
+  landed before the overlay was perceptible.
+
+  Both ways of reaching the unset state are gone:
+
+  - the table no longer requires an active drill-down. It is built as soon as the run has produced
+    the linker, and `activeDrillDown` supplies the filter it is pinned to. `sourceId` comes from the
+    persisted table state and not from the filters, so pinning a substitution is a re-query against a
+    source that already exists — the same path as switching between two open drill-downs, which was
+    never slow. Before anything has been browsed the table is unpinned and nothing renders it
+  - closing the last drill-down leaves the field naming the one just closed instead of blanking it. A
+    stale id costs nothing: no section lists it, no page renders it, and the model simply keeps one
+    table spec warm
+
+  Opening also writes the field in the same breath as the section rather than leaving it to the
+  page's on-mount watcher, which saves a round trip on the way in.
+
+- ec62268: MILAB-6876: open the drill-down table on its five useful columns
+
+  The Table tab discovers every variant-keyed column in the result pool, so a project carrying UMAP
+  dimensions, sequence properties and two conditions' worth of scores opened ~15 columns wide. It now
+  opens on Variant Id, Mutations, the mutation count, the sequence, and the one score the drill-down
+  was opened from. Everything else is `optional` — still in the column picker, switched off.
+
+  - the score is matched by name + domain, not by id: `ColumnSelector` has no id form, and name +
+    domain is what tells `Bin score (5.5)` from `(7.5)`. It resolves against the undeduped discovery,
+    because `scoreOptions` dedups on name+domain while the table dedups on leaf id, and the two can
+    keep different reachability variants of one column
+  - these defaults SEED a table; they do not re-apply to one that has already been opened. A saved
+    column selection outranks the rules rather than merging with them — `computeHiddenColumns` takes
+    the state's `hiddenColIds` instead of the rule-derived optional set whenever one is present, and
+    the grid persists one on its very first render, from intrinsic annotations alone. No migration is
+    shipped for this: the drill-down is unreleased, so the only affected tables are in development
+    projects, and recreating the block clears the state (`createDefaultPTableParams` leaves
+    `hiddenColIds` null). Worth knowing before the next change to this table's defaults
+  - the `mutationId` axis is hidden in tables, via a `pl7.app/table/visibility` annotation on the axis
+    spec itself. The table is already pinned to one mutation by a model-side filter, so the axis drew
+    one constant value in every row. The model cannot reach it: `ColumnsDisplayOptions` carries rules
+    for columns only, and axis visibility is derived from whether a primary column declares the axis —
+    which this one is, being half of the linker. Charts are unaffected; graph-maker reads no
+    `pl7.app/table/*`
+
+  Drill-down chart: the partner map's Metadata picker is narrowed to the open drill-down's own score,
+  via GraphMaker's `metaColumnPredicate`. The workflow writes one pair frame per score and each
+  carries its own `partnerMutation` and `pairVariantKey` beside `cellValue`, so four selected scores
+  put four identically-labelled "Partner mutation" and four "Variant" entries in the picker. Only
+  `cellValue` differs per score; the other two are properties of the cell. Emitting them once is not
+  available — that is the hoist out of the per-score loop the workflow's NOTE records as fatal to
+  ptabler — so the copies stay in the frame, where `companion()` and saved chart states still resolve
+  them, and only the picker is filtered.
+
+  Drill-down chart title is hidden (`axesSettings.title.mode`), not merely empty: an empty title still
+  reserves its band, which drew a blank strip under the PlBlockPage header. Landscape charts keep
+  theirs — they have no PlBlockPage header, so GraphMaker's title is the page heading and the score
+  tabs render into its title-line slot.
+
+- 2b99e56: MILAB-6876: build against released dependencies
+
+  `@milaboratories/graph-maker` 1.8.0 -> 1.9.0, the release that carries the heat map `@cell-click`
+  event this feature is built on. The block was developed against local builds of graph-maker,
+  miplots4, pf-plots, model, ui-vue and uikit, pinned through `pnpm.overrides` and a `file:` path on
+  the model package while that work was unreleased. All of it is published now, so the overrides are
+  gone and the lockfile resolves from the registry alone.
+
+- 905b320: MILAB-6876: say that landscape cells are clickable
+
+  A heat map cell reads as a swatch, and nothing about the map said one opens anything — the feature
+  was there to be stumbled into. The landscape's title line now carries the hint, in grey beside the
+  score name: _Click a cell to browse variants carrying that substitution_.
+
+  In the title line rather than as a notification: it is true of the page always, not of anything the
+  user just did, and a banner saying it on every visit is a banner that gets dismissed unread. It
+  truncates with an ellipsis on a narrow window rather than pushing the score name out of the header,
+  and carries the full text as a `title`, so a clipped hint is still readable on hover.
+
+  Not shown on the placeholder chart, which has no cells to click.
+
+- 860d80f: MILAB-6876: outline the parent residue on both heat maps
+
+  The unmutated reference every score and fold change is measured against is now marked in the
+  picture, not only on the annotation track beneath it.
+
+  - the workflow emits `pl7.app/repertoire/isParentResidue`, a per-cell subset column present only
+    at the parent residue, in both heat maps' frames
+  - the mutation landscape declares its cell axes dense, because the parent cell is absent there by
+    construction: a single mutant differs from its parent, so no variant carries the parent residue
+    at its own position. The full position x state grid supplies the cell; uncovered substitutions
+    arrive with no value and stay empty
+  - a `v3` migration pins "Treat NA value as: empty" on landscape charts saved before this, which
+    would otherwise paint every uncovered substitution as a real zero
+
+  Parent residue also moves from an annotation track to the second part of the X axis label, so each
+  column reads "32, D" — the position and the residue it started as — rotated 45° to fit. The region
+  track stays where it is. A `v4` migration angles the labels of charts saved before this, which the
+  defaults cannot reach: the angle is a chart's own axes setting, seeded once when it is created.
+
+  Needs the graph-maker release that adds the heat map Highlight input.
+
+- 459a062: MILAB-6876: per-position variant browsing
+
+  A cell on the mutation landscape says "A5C scores 0.8". The next question is always the same:
+  what else did we observe that carries this substitution, and what happened to it there? Browsing
+  into a substitution now answers it, in a section of its own under the landscape.
+
+  - **Table tab** — every observed variant carrying the substitution, from the lone single mutant to
+    every combination it appears in, with sequence, mutations, mutation count, abundance and the
+    selected scores joined in from the result pool.
+  - **Heatmap tab** — the double mutants containing it, on the same position x residue grid, where
+    each cell is now the _partner_ substitution. The fixed mutation is drawn in its own cell and
+    outlined, carrying the singleton's own score — the reference every pair is read against. Cells
+    with no observed double mutant stay empty; nothing is filled in from a model.
+
+  Sections accumulate, so several substitutions can be compared without losing the earlier ones, and
+  each page carries its own close control. Browsing writes UI state only — it reaches neither `args`
+  nor `prerunArgs` — so nothing goes stale and no Run button appears. A `v5` migration adds the
+  field; projects made before this simply have none open.
+
+  The workflow precomputes the drill-down for every cell in one run, from data it already had: the
+  per-variant mutation cells the landscape derives are reused without the `mutationCount == 1`
+  predicate, so mutation membership needs no designator string parsed. Three new outputs — the
+  co-occurrence count, the mutation-to-variant linker, and the partner pair map. A library with no
+  multi-mutants produces an empty pair map and costs nothing.
+
+  Variants of any mutation count are covered: the Table tab lists every variant carrying the
+  substitution, triples and beyond included, while the partner map draws doubles — which is what a
+  partner map is.
+
+  The ptabler step's RAM request is now set explicitly. It was sized from `f.size()`, which counts
+  only inputs attached with `addFile()`, and this workflow attaches none — everything is read
+  through `pt.p.column`. So the measured volume was zero and the run always received the 2 GiB
+  floor, whatever the library: a ~1M variant profiling run gives a ~118M row state matrix and got
+  the same request as a 2M row one. This affected the block before this feature existed.
+
+  The landscape's tooltip now carries a **Co-occurring variants** count, so a cell says whether it
+  has anything to browse before the click is spent. It is worth showing for its own sake: it says
+  how well a substitution has been explored in combination, which is a fact about the library.
+
+  A drill-down is opened by clicking the cell. A cell with nothing to browse answers when asked:
+  clicking it explains why — the substitution is carried by no multi-mutant, or the cell is the
+  parent residue and names no substitution at all. Nothing is announced up front, and no click is
+  silently ignored, which is what made an empty dataset read as a broken block. Only cells with at least one co-occurring variant
+  respond — the rest would open a browser holding nothing but the singleton just clicked, so they
+  keep the default cursor and do nothing.
+
+- 078aaea: MILAB-6876: drop drill-downs the current results cannot serve
+
+  An open drill-down is a substitution plus the score it is measured on, and both could stop existing
+  under the block. Deselect that score, or move the plot to another parent, and the section stayed in
+  the sidebar pointing at a page with an empty table and a map with no value column — a dead end that
+  looked like a broken block rather than a stale link. A drill-down now records the parent it was
+  opened under, and open entries are reconciled against each run's results.
+
+  Pruned on positive evidence only, never on its absence: `landscapePanels` is `undefined` while the
+  outputs are not ready and `[]` before any score has produced data, and reading either as "your
+  score is gone" would throw the user's open browsers away every time a run starts. An entry that
+  recorded no parent — opened before this shipped — is left alone rather than guessed at. No
+  migration: `parentId` is optional on a shape that is not released.
+
+  `DrillDownPage` now redirects itself when its own entry disappears, so a pruned page does not leave
+  the sidebar with nothing selected. That also covers a `/drilldown?m=` URL reached directly with a
+  substitution that was never open.
+
+- 98cb8a9: MILAB-6876: raise the SDK catalog
+
+  `@platforma-sdk/model` and `ui-vue` 1.83 -> 1.84.1, `workflow-tengo` 6.9.0 -> 6.12.1,
+  `block-tools` 2.15.0 -> 2.16.3, `tengo-builder` 4.0.25 -> 4.1.4. Type checks, lint and the build
+  pass unchanged; no call site needed adjusting.
+
 ## 1.1.5
 
 ### Patch Changes
