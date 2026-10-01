@@ -8,6 +8,7 @@ import {
   makeDrillDownChartState,
   withParentOnXAxis,
   withRegionColoursReseeded,
+  withGradientReseeded,
 } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import { describe, expect, test } from "vitest";
 
@@ -236,5 +237,45 @@ describe("withRegionColoursReseeded", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const state = { title: "x" } as any;
     expect(withRegionColoursReseeded(state)).toBe(state);
+  });
+});
+
+describe("withGradientReseeded", () => {
+  // A saved chart's own ids. The value column's embeds the score index and the resolve path,
+  // which is exactly why the migration matches on the mapping's `type` and not on this string.
+  const valueSource =
+    '{"kind":"column","name":"{\\"name\\":\\"score0/cellValue\\",\\"resolvePath\\":[\\"main\\",\\"singleMutantHeatmapPf\\"]}","type":"Double"}';
+  const regionSource =
+    '{"kind":"column","name":"{\\"name\\":\\"region/region\\",\\"resolvePath\\":[\\"main\\",\\"singleMutantHeatmapPf\\"]}","type":"String"}';
+
+  test("drops the gradient so the column's declared midpoint can seed it", () => {
+    const state = {
+      dataBindAes: {
+        [valueSource]: { type: "continuous", palette: "viridis", midPoint: null, log: false },
+        [regionSource]: { type: "categorical", order: ["FR1", "CDR1"] },
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    const out = withGradientReseeded(state);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(Object.keys((out as any).dataBindAes)).toEqual([regionSource]);
+  });
+
+  test("keeps every categorical mapping, whatever its source", () => {
+    const state = {
+      dataBindAes: {
+        [regionSource]: { type: "categorical", order: ["FR1"] },
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    const out = withGradientReseeded(state);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(Object.keys((out as any).dataBindAes)).toEqual([regionSource]);
+  });
+
+  test("leaves a chart that has no saved mappings alone", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const state = { title: "x" } as any;
+    expect(withGradientReseeded(state)).toBe(state);
   });
 });

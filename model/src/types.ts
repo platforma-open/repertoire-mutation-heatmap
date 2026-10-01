@@ -135,6 +135,12 @@ export type BlockDataV4 = Omit<
   "drillDowns" | "activeDrillDown" | "drillDownChartState" | "drillDownTableState"
 >;
 
+/** Data version `v5`: the shape as it stands; `v6` only rewrites landscape chart states. */
+export type BlockDataV5 = BlockData;
+
+/** Data version `v6`: the same shape again; `v7` only rewrites landscape chart states. */
+export type BlockDataV6 = BlockData;
+
 /** Unified persisted data: workflow-relevant selections + UI view state. */
 export type BlockData = {
   // Block label shown as the subtitle. `customBlockLabel` is the user-renamed override;

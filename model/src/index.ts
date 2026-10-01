@@ -10,6 +10,7 @@ import {
   makeLandscapeChartState,
   mapChartStates,
   withEmptyNAValue,
+  withGradientReseeded,
   withParentOnXAxis,
   withRegionColoursReseeded,
 } from "./chart-state";
@@ -29,6 +30,8 @@ import type {
   BlockDataV2,
   BlockDataV3,
   BlockDataV4,
+  BlockDataV5,
+  BlockDataV6,
   LandscapePanel,
 } from "./types";
 
@@ -37,6 +40,7 @@ export type * from "./types";
 export {
   makeDrillDownChartState,
   makeLandscapeChartState,
+  withGradientReseeded,
   withParentOnXAxis,
   withRegionColoursReseeded,
 } from "./chart-state";
@@ -150,12 +154,47 @@ const dataModel = new DataModelBuilder({ kind })
   // region colour mapping so the palette the region column now declares can seed it. Without
   // that last part a chart keeps whatever mapping it built for itself, and a landscape and a
   // drill-down go on colouring the same region differently.
-  .migrate<BlockData>("v5", (v4) => ({
+  .migrate<BlockDataV5>("v5", (v4) => ({
     ...v4,
     drillDowns: [],
     drillDownChartState: makeDrillDownChartState(),
     drillDownTableState: createPlDataTableStateV2(),
     ...mapChartStates(v4, withRegionColoursReseeded),
+  }))
+  // Let the landscape value column's declared gradient take effect on charts that predate it.
+  // graph-maker seeds a gradient once and leaves an existing mapping alone, so without this a
+  // saved chart keeps the scale it built for itself and the declared midpoint never applies.
+  //
+  // Only the landscape states. The composition map declares no `pl7.app/graph/palette`, so
+  // reseeding it would drop a mapping for nothing, and the drill-down's pair column declares none
+  // either — hence neither `mapChartStates` nor `drillDownChartState` here.
+  .migrate<BlockDataV6>("v6", (v5) => ({
+    ...v5,
+    singleMutantHeatmapState: withGradientReseeded(v5.singleMutantHeatmapState),
+    singleMutantHeatmapStates: Object.fromEntries(
+      Object.entries(v5.singleMutantHeatmapStates).map(([key, state]) => [
+        key,
+        withGradientReseeded(state),
+      ]),
+    ),
+  }))
+  // Again, because the declared palette itself changed — from a bounded linear scale centred on
+  // the baseline to an unbounded log one. A chart seeded by `v6` holds a mapping built from the
+  // old declaration, and a seeded source is never revisited, so without this it keeps a scale
+  // that sent a quarter of its cells off the palette end.
+  //
+  // Worth knowing for next time: every change to a declared palette needs its own reseed, because
+  // the seeding is once-only. The two steps are kept apart rather than folded together so a
+  // project that stopped at `v6` still lands correctly.
+  .migrate<BlockData>("v7", (v6) => ({
+    ...v6,
+    singleMutantHeatmapState: withGradientReseeded(v6.singleMutantHeatmapState),
+    singleMutantHeatmapStates: Object.fromEntries(
+      Object.entries(v6.singleMutantHeatmapStates).map(([key, state]) => [
+        key,
+        withGradientReseeded(state),
+      ]),
+    ),
   }))
   .init(() => ({
     drillDowns: [],
