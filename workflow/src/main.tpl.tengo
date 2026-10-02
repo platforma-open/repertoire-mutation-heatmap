@@ -16,7 +16,8 @@
 // [round, parentId, position, state] -> log2fc. Needs at least two rounds.
 //
 // Both maps ride alongside two position-keyed annotation tracks — region membership and the
-// parent residue — which GraphMaker renders under the X axis.
+// parent residue — which GraphMaker renders under the X axis. For amino acids, a state-keyed
+// property track groups and orders the residue rows on the Y axis.
 
 wf := import("@platforma-sdk/workflow-tengo:workflow")
 xsv := import("@platforma-sdk/workflow-tengo:pframes.xsv")
@@ -24,9 +25,26 @@ pframes := import("@platforma-sdk/workflow-tengo:pframes")
 pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
 pt := import("@platforma-sdk/workflow-tengo:pt")
 maps := import("@platforma-sdk/workflow-tengo:maps")
+canonical := import("@platforma-sdk/workflow-tengo:canonical")
 json := import("json")
 units := import("@platforma-sdk/workflow-tengo:units")
 pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
+
+// Amino acid property groups for the Y-axis track, in display order. The number leads each
+// label because graph-maker sorts heatmap row groups by label and takes no custom order.
+// `colour` is an index into graph-maker's `triadic` palette, kept clear of the region track's 0-6.
+AA_GROUPS := [
+	{ label: "1 Hydrophobic", residues: ["A", "V", "I", "L", "M"], colour: 25 },
+	{ label: "2 Aromatic", residues: ["F", "W", "Y"], colour: 7 },
+	{ label: "3 Polar", residues: ["S", "T", "N", "Q"], colour: 10 },
+	{ label: "4 Special", residues: ["C", "G", "P"], colour: 16 },
+	{ label: "5 Positive", residues: ["K", "R", "H"], colour: 19 },
+	{ label: "6 Negative", residues: ["D", "E"], colour: 22 },
+	{ label: "7 Stop", residues: ["*"], colour: 13 },
+	{ label: "8 Deletion", residues: ["-"], colour: 24 }
+]
+// Insertions (multi-letter states) and unknown residues.
+AA_OTHER_GROUP := { label: "9 Other", colour: 15 }
 
 // Join keys must stay byte-identical to the profiler's emitted axis names.
 VARIANT_KEY_AXIS := "pl7.app/variantKey"
@@ -169,6 +187,7 @@ wf.body(func(args) {
 	})
 	// Y-axis (state) label, alphabet-aware: residues for the aa matrix, bases for nt.
 	stateAxisLabel := (alphabet == "aminoacid") ? "Amino Acids" : "Nucleotides"
+	hasAaProperties := alphabet == "aminoacid"
 
 	// The landscape's cell is (position, state). Its parent-residue cell holds a value only when
 	// the dataset has a WT variant: a single mutant differs from its parent, so no single mutant
@@ -357,6 +376,35 @@ wf.body(func(args) {
 		select(pt.col("position"), pt.col("parentResidue").alias("state")).
 		withColumns(pt.lit(1).alias("isParentResidue"))
 	parentFlagLandscapeDf.save("parentResidueFlagLandscape.tsv")
+
+	// --- Amino acid property track ---
+	// [state] -> group and rank, for every state the matrix carries. The rank orders the rows
+	// inside each group.
+	if hasAaProperties {
+		groupExpr := undefined
+		rankExpr := undefined
+		rank := 0
+		for group in AA_GROUPS {
+			inGroup := pt.col("state").inSet(group.residues...)
+			groupExpr = is_undefined(groupExpr) ? pt.when(inGroup) : groupExpr.when(inGroup)
+			groupExpr = groupExpr.then(pt.lit(group.label))
+			for residue in group.residues {
+				rank += 1
+				isResidue := pt.col("state").eq(pt.lit(residue))
+				rankExpr = is_undefined(rankExpr) ? pt.when(isResidue) : rankExpr.when(isResidue)
+				rankExpr = rankExpr.then(pt.lit(rank))
+			}
+		}
+		smDf.
+			groupBy("state").
+			agg(pt.col("variantKey").count().alias("n")).
+			select(
+				pt.col("state"),
+				groupExpr.otherwise(pt.lit(AA_OTHER_GROUP.label)).alias("aaGroup"),
+				rankExpr.otherwise(pt.lit(rank + 1)).alias("aaRank")
+			).
+			save("aaPropertyByState.tsv")
+	}
 
 	// --- Mutation landscape precalc (optional) ---
 	// The singleton cell mode: a cell holds the value of the ONE single-mutant variant carrying
@@ -843,6 +891,53 @@ wf.body(func(args) {
 			{ splitDataAndSpec: true }
 		)
 	}
+	// Amino acid property track: [state] -> group (the Y-axis track and row groups) and
+	// [state] -> rank (the row order inside a group). Keyed on the state axis without its
+	// dense annotation; identity ignores annotations, so it still joins the value columns.
+	aaPropertyCols := undefined
+	if hasAaProperties {
+		aaGroupColours := {}
+		for group in AA_GROUPS {
+			aaGroupColours[group.label] = group.colour
+		}
+		aaGroupColours[AA_OTHER_GROUP.label] = AA_OTHER_GROUP.colour
+		aaPropertyCols = xsv.importFile(
+			ptResult.getFile("aaPropertyByState.tsv"),
+			"tsv",
+			{
+				axes: [{ column: "state", spec: stateAxisSpecBase }],
+				columns: [
+					{
+						column: "aaGroup",
+						spec: {
+							name: "pl7.app/repertoire/aaPropertyGroup",
+							valueType: "String",
+							annotations: {
+								"pl7.app/label": "AA property",
+								"pl7.app/graph/palette": string(canonical.encode({
+									name: "triadic",
+									mapping: aaGroupColours
+								}))
+							}
+						}
+					},
+					{
+						column: "aaRank",
+						spec: {
+							name: "pl7.app/repertoire/aaPropertyRank",
+							valueType: "Int",
+							annotations: {
+								"pl7.app/label": "AA property order"
+							}
+						}
+					}
+				],
+				storageFormat: "Parquet",
+				partitionKeyLength: 0
+			},
+			{ splitDataAndSpec: true }
+		)
+	}
 	// Parent-residue track: [position] -> parentResidue, keyed on the same position axis as the
 	// value columns. String value → discrete annotation coloured by residue; the residue shows
 	// in the tooltip. Added to the same frames as the region track, which the UI presets as
@@ -931,6 +1026,11 @@ wf.body(func(args) {
 		}
 		for k, v in parentCols {
 			lsPf.add("parent/" + k, trace.inject(v.spec), v.data)
+		}
+		if hasAaProperties {
+			for k, v in aaPropertyCols {
+				lsPf.add("aaProperty/" + k, trace.inject(v.spec), v.data)
+			}
 		}
 		// Parent-residue marking, [position, state] -> 1 on the parent cell only. Its axes are
 		// the cell's own, so GraphMaker accepts it as a per-cell source for Highlight; the
@@ -1129,6 +1229,11 @@ wf.body(func(args) {
 		for k, v in parentCols {
 			ddPf.add("parent/" + k, trace.inject(v.spec), v.data)
 		}
+		if hasAaProperties {
+			for k, v in aaPropertyCols {
+				ddPf.add("aaProperty/" + k, trace.inject(v.spec), v.data)
+			}
+		}
 		outputs.drillDownHeatmapPf = pframes.exportFrame(ddPf.build())
 
 		// Mutation -> variant membership, [mutationId, variantKey] -> 1, exported on its own.
@@ -1322,6 +1427,11 @@ wf.body(func(args) {
 		}
 		for k, v in parentCols {
 			compPf.add("parent/" + k, trace.inject(v.spec), v.data)
+		}
+		if hasAaProperties {
+			for k, v in aaPropertyCols {
+				compPf.add("aaProperty/" + k, trace.inject(v.spec), v.data)
+			}
 		}
 		outputs.compositionHeatmapPf = pframes.exportFrame(compPf.build())
 	}

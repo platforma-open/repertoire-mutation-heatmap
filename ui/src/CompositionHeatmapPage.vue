@@ -2,6 +2,7 @@
 import type { PredefinedGraphOption } from "@milaboratories/graph-maker";
 import { GraphMaker } from "@milaboratories/graph-maker";
 import { computed } from "vue";
+import { aaPropertyOptions } from "./aaPropertyOptions";
 import { useApp } from "./app";
 import Settings from "./Settings.vue";
 
@@ -24,6 +25,7 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
     { inputName: "value", selectedSource: valueCol.spec },
     { inputName: "x", selectedSource: axes[2] }, // position
     { inputName: "y", selectedSource: axes[3] }, // state
+    ...aaPropertyOptions(pCols),
     { inputName: "tabBy", selectedSource: axes[1] }, // parentId — one tab per parent
     { inputName: "facetBy", selectedSource: axes[0] }, // round — one panel per round
     { inputName: "tooltipContent", selectedSource: axes[3] }, // show State in the tooltip

@@ -9,6 +9,7 @@ import { getUniqueSourceValuesWithLabels } from "@platforma-sdk/model";
 import type { PObjectId } from "@platforma-sdk/model";
 import { PlNotificationAlert } from "@platforma-sdk/ui-vue";
 import { computed, ref, watch } from "vue";
+import { aaPropertyOptions } from "./aaPropertyOptions";
 import { useApp } from "./app";
 import { useDrillDowns } from "./drillDown";
 import Settings from "./Settings.vue";
@@ -236,6 +237,7 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
     { inputName: "x", selectedSource: axes[0] }, // position
     ...parentAxisOption.value, // then parent residue, so the label reads "position, parent"
     { inputName: "y", selectedSource: axes[1] }, // state
+    ...aaPropertyOptions(app.model.outputs.singleMutantHeatmapPCols),
     { inputName: "tooltipContent", selectedSource: axes[1] }, // show State in the tooltip
     ...coOccurrenceOption.value,
     ...regionOption.value,
