@@ -126,6 +126,12 @@ describe("makeDrillDownChartState", () => {
   });
 });
 
+describe("Y annotation track title", () => {
+  test("new charts start with the Y track title hidden", () => {
+    expect(makeDrillDownChartState().axesSettings?.axisY?.annotationTitlePosition).toBe("hidden");
+  });
+});
+
 describe("drillDownLabel", () => {
   test("names the substitution and the score it is measured on", () => {
     expect(drillDownLabel("G9V", "Bin score (5.5)")).toBe("G9V · Bin score (5.5)");
