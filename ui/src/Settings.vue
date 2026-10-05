@@ -41,6 +41,9 @@ function onSelectStateMatrix(ref: StateMatrixRef | undefined) {
   // one; left in place they reach the workflow and fail it on a column with no spec.
   app.model.data.scoreRefs = [];
   app.model.data.roundFrequencyRefs = [];
+  // Open drill-downs name a substitution and score of the previous dataset. The prune in
+  // useDrillDowns keeps them when the new run has no scores or reuses the parent id.
+  app.model.data.drillDowns = [];
   app.model.data.defaultBlockLabel =
     app.model.outputs.stateMatrixOptions?.find(
       (o) => ref && o.ref.blockId === ref.blockId && o.ref.name === ref.name,
