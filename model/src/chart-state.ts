@@ -39,8 +39,8 @@ export function makeLandscapeChartState(
       axisY: {
         hideAxisLabels: false,
         cellSize: 20,
-        // The legend already names the amino acid property groups.
-        annotationTitlePosition: "hidden",
+        // Below the plot, so the two Y-axis tracks are named without a band above the map.
+        annotationTitlePosition: "bottom",
       },
     },
   };

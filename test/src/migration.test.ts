@@ -127,8 +127,8 @@ describe("makeDrillDownChartState", () => {
 });
 
 describe("Y annotation track title", () => {
-  test("new charts start with the Y track title hidden", () => {
-    expect(makeDrillDownChartState().axesSettings?.axisY?.annotationTitlePosition).toBe("hidden");
+  test("new charts show the Y track titles at the bottom", () => {
+    expect(makeDrillDownChartState().axesSettings?.axisY?.annotationTitlePosition).toBe("bottom");
   });
 });
 

@@ -201,7 +201,7 @@ const dataModel = new DataModelBuilder({ kind })
         axisY: {
           hideAxisLabels: false,
           cellSize: 20,
-          annotationTitlePosition: "hidden",
+          annotationTitlePosition: "bottom",
         },
       },
     },
