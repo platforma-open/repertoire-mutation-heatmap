@@ -30,16 +30,17 @@ json := import("json")
 units := import("@platforma-sdk/workflow-tengo:units")
 pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
 
-// Amino acid property groups for the Y-axis track, in display order. The rows follow the rank
-// built from this list; `pl7.app/discreteValues` gives the legend the same order.
-// `colour` is an index into graph-maker's `triadic` palette, kept clear of the region track's 0-6.
+// Amino acid property groups for the Y-axis track, in display order: Enrich2's sequence-function
+// map order and groups, with "(+)"/"(-)" spelled out for the legend. The rows follow the rank
+// built from this list; `pl7.app/discreteValues` gives the legend the same order. `colour` is an
+// index into graph-maker's `triadic` palette, kept clear of the region track's 0-6.
 AA_GROUPS := [
-	{ label: "Hydrophobic", residues: ["A", "V", "I", "L", "M"], colour: 25 },
-	{ label: "Aromatic", residues: ["F", "W", "Y"], colour: 7 },
-	{ label: "Polar", residues: ["S", "T", "N", "Q"], colour: 10 },
-	{ label: "Special", residues: ["C", "G", "P"], colour: 16 },
-	{ label: "Positive", residues: ["K", "R", "H"], colour: 19 },
+	{ label: "Positive", residues: ["H", "K", "R"], colour: 19 },
 	{ label: "Negative", residues: ["D", "E"], colour: 22 },
+	{ label: "Polar-neutral", residues: ["C", "M", "N", "Q", "S", "T"], colour: 10 },
+	{ label: "Non-polar", residues: ["A", "I", "L", "V"], colour: 25 },
+	{ label: "Aromatic", residues: ["F", "W", "Y"], colour: 7 },
+	{ label: "Unique", residues: ["G", "P"], colour: 16 },
 	{ label: "Stop", residues: ["*"], colour: 13 },
 	{ label: "Deletion", residues: ["-"], colour: 24 }
 ]
