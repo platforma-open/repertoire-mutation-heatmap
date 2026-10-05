@@ -37,6 +37,13 @@ function onSelectStateMatrix(ref: StateMatrixRef | undefined) {
   // args, so this holds the workflow (uncalculated) until the options watch auto-selects a
   // valid default — avoiding a run over a stale/mismatched selection.
   app.model.data.selectedParentId = undefined;
+  // Score and round ids are anchored on the previous dataset and resolve to nothing on the new
+  // one; left in place they reach the workflow and fail it on a column with no spec.
+  app.model.data.scoreRefs = [];
+  app.model.data.roundFrequencyRefs = [];
+  // Open drill-downs name a substitution and score of the previous dataset. The prune in
+  // useDrillDowns keeps them when the new run has no scores or reuses the parent id.
+  app.model.data.drillDowns = [];
   app.model.data.defaultBlockLabel =
     app.model.outputs.stateMatrixOptions?.find(
       (o) => ref && o.ref.blockId === ref.blockId && o.ref.name === ref.name,
