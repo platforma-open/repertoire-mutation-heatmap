@@ -285,29 +285,6 @@ const CLICK_HINT = "Click a cell to browse variants carrying that substitution";
 </script>
 
 <template>
-  <!--
-    `categorical: 'triadic'` matches the synthetic-repertoire-profiler block, whose state
-    heat map renders the same two annotation tracks. It is the only categorical palette
-    with enough colours for a residue alphabet: it carries all 27 base colours, where
-    light/bright/dark carry 9 each and paired 18. Discrete colours are assigned
-    `colors[idx % colors.length]`, so the 9-colour default reuses a colour every 9th
-    residue — visible repetition across the 20 residues plus gap on the Parent AA track.
-    Past 27 distinct states it still wraps; graph-maker honours only a palette NAME for
-    annotation tracks, not an explicit residue->colour map.
-
-    `:key` forces a fresh GraphMaker per score: its store is seeded from the state object at
-    setup, so swapping the bound state without remounting would carry the previous score's
-    settings over and write them into the new score's state.
-  -->
-  <!-- Floated over the chart, not stacked above it: the same fixed bottom-right corner and the
-       same component graph-maker uses for its own truncation and export warnings, so the block
-       does not invent a second notification style. A full-width banner also displaced the plot. -->
-  <div v-if="clickNotice" :class="$style.alerts">
-    <PlNotificationAlert v-model="noticeOpen" type="warning" closable>
-      {{ clickNotice }}
-    </PlNotificationAlert>
-  </div>
-
   <GraphMaker
     v-if="activePanel && !noSingleMutants"
     :key="activePanel.key"
@@ -346,6 +323,29 @@ const CLICK_HINT = "Click a cell to browse variants carrying that substitution";
       <Settings />
     </template>
   </GraphMaker>
+
+  <!--
+    `categorical: 'triadic'` matches the synthetic-repertoire-profiler block, whose state
+    heat map renders the same two annotation tracks. It is the only categorical palette
+    with enough colours for a residue alphabet: it carries all 27 base colours, where
+    light/bright/dark carry 9 each and paired 18. Discrete colours are assigned
+    `colors[idx % colors.length]`, so the 9-colour default reuses a colour every 9th
+    residue — visible repetition across the 20 residues plus gap on the Parent AA track.
+    Past 27 distinct states it still wraps; graph-maker honours only a palette NAME for
+    annotation tracks, not an explicit residue->colour map.
+
+    `:key` forces a fresh GraphMaker per score: its store is seeded from the state object at
+    setup, so swapping the bound state without remounting would carry the previous score's
+    settings over and write them into the new score's state.
+  -->
+  <!-- Floated over the chart, not stacked above it: the same fixed bottom-right corner and the
+       same component graph-maker uses for its own truncation and export warnings, so the block
+       does not invent a second notification style. A full-width banner also displaced the plot. -->
+  <div v-if="clickNotice" :class="$style.alerts">
+    <PlNotificationAlert v-model="noticeOpen" type="warning" closable>
+      {{ clickNotice }}
+    </PlNotificationAlert>
+  </div>
 </template>
 
 <style module>
