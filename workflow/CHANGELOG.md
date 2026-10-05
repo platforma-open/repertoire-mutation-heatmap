@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.workflow
 
+## 1.1.7
+
+### Patch Changes
+
+- 4d6dda2: Clear selected score and enrichment columns on dataset change
+
 ## 1.1.6
 
 ### Patch Changes

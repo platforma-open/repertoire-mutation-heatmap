@@ -1,5 +1,13 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.test
 
+## 1.0.4
+
+### Patch Changes
+
+- 4d6dda2: Clear selected score and enrichment columns on dataset change
+- Updated dependencies [4d6dda2]
+  - @platforma-open/milaboratories.repertoire-mutation-heatmap.model@1.1.7
+
 ## 1.0.3
 
 ### Patch Changes
