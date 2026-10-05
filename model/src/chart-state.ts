@@ -39,7 +39,7 @@ export function makeLandscapeChartState(
       axisY: {
         hideAxisLabels: false,
         cellSize: 20,
-        // The row group labels already name the amino acid property track.
+        // The legend already names the amino acid property groups.
         annotationTitlePosition: "hidden",
       },
     },

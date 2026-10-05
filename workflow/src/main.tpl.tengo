@@ -30,21 +30,21 @@ json := import("json")
 units := import("@platforma-sdk/workflow-tengo:units")
 pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
 
-// Amino acid property groups for the Y-axis track, in display order. The number leads each
-// label because graph-maker sorts heatmap row groups by label and takes no custom order.
+// Amino acid property groups for the Y-axis track, in display order. The rows follow the rank
+// built from this list; `pl7.app/discreteValues` gives the legend the same order.
 // `colour` is an index into graph-maker's `triadic` palette, kept clear of the region track's 0-6.
 AA_GROUPS := [
-	{ label: "1 Hydrophobic", residues: ["A", "V", "I", "L", "M"], colour: 25 },
-	{ label: "2 Aromatic", residues: ["F", "W", "Y"], colour: 7 },
-	{ label: "3 Polar", residues: ["S", "T", "N", "Q"], colour: 10 },
-	{ label: "4 Special", residues: ["C", "G", "P"], colour: 16 },
-	{ label: "5 Positive", residues: ["K", "R", "H"], colour: 19 },
-	{ label: "6 Negative", residues: ["D", "E"], colour: 22 },
-	{ label: "7 Stop", residues: ["*"], colour: 13 },
-	{ label: "8 Deletion", residues: ["-"], colour: 24 }
+	{ label: "Hydrophobic", residues: ["A", "V", "I", "L", "M"], colour: 25 },
+	{ label: "Aromatic", residues: ["F", "W", "Y"], colour: 7 },
+	{ label: "Polar", residues: ["S", "T", "N", "Q"], colour: 10 },
+	{ label: "Special", residues: ["C", "G", "P"], colour: 16 },
+	{ label: "Positive", residues: ["K", "R", "H"], colour: 19 },
+	{ label: "Negative", residues: ["D", "E"], colour: 22 },
+	{ label: "Stop", residues: ["*"], colour: 13 },
+	{ label: "Deletion", residues: ["-"], colour: 24 }
 ]
 // Insertions (multi-letter states) and unknown residues.
-AA_OTHER_GROUP := { label: "9 Other", colour: 15 }
+AA_OTHER_GROUP := { label: "Other", colour: 15 }
 
 // Join keys must stay byte-identical to the profiler's emitted axis names.
 VARIANT_KEY_AXIS := "pl7.app/variantKey"
@@ -378,8 +378,7 @@ wf.body(func(args) {
 	parentFlagLandscapeDf.save("parentResidueFlagLandscape.tsv")
 
 	// --- Amino acid property track ---
-	// [state] -> group and rank, for every state the matrix carries. The rank orders the rows
-	// inside each group.
+	// [state] -> group and rank, for every state the matrix carries. The rank orders the rows.
 	if hasAaProperties {
 		groupExpr := undefined
 		rankExpr := undefined
@@ -891,16 +890,17 @@ wf.body(func(args) {
 			{ splitDataAndSpec: true }
 		)
 	}
-	// Amino acid property track: [state] -> group (the Y-axis track and row groups) and
-	// [state] -> rank (the row order inside a group). Keyed on the state axis without its
+	// Amino acid property track: [state] -> group (the Y-axis track) and [state] -> rank (the
+	// row order). Keyed on the state axis without its
 	// dense annotation; identity ignores annotations, so it still joins the value columns.
 	aaPropertyCols := undefined
 	if hasAaProperties {
 		aaGroupColours := {}
-		for group in AA_GROUPS {
+		aaGroupOrder := []
+		for group in append(AA_GROUPS, AA_OTHER_GROUP) {
 			aaGroupColours[group.label] = group.colour
+			aaGroupOrder = append(aaGroupOrder, group.label)
 		}
-		aaGroupColours[AA_OTHER_GROUP.label] = AA_OTHER_GROUP.colour
 		aaPropertyCols = xsv.importFile(
 			ptResult.getFile("aaPropertyByState.tsv"),
 			"tsv",
@@ -914,6 +914,7 @@ wf.body(func(args) {
 							valueType: "String",
 							annotations: {
 								"pl7.app/label": "AA property",
+								"pl7.app/discreteValues": string(json.encode(aaGroupOrder)),
 								"pl7.app/graph/palette": string(canonical.encode({
 									name: "triadic",
 									mapping: aaGroupColours

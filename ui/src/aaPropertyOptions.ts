@@ -2,9 +2,9 @@ import type { PredefinedGraphOption } from "@milaboratories/graph-maker";
 import type { PColumnSpec } from "@platforma-sdk/model";
 
 /**
- * Groups the residue rows (Y axis) by amino acid property: a coloured track beside the rows,
- * one labelled block per group, and the standard residue order inside each block. Empty for a
- * nucleotide map, which the workflow gives no property columns.
+ * Orders the residue rows (Y axis) by amino acid property and colours them by group in a track
+ * beside the rows. No row groups: graph-maker sorts those by name and takes no custom order.
+ * Empty for a nucleotide map, which the workflow gives no property columns.
  */
 export function aaPropertyOptions(
   pCols: { spec: PColumnSpec }[] | undefined,
@@ -14,7 +14,6 @@ export function aaPropertyOptions(
   if (!group || !rank) return [];
   return [
     { inputName: "annotationsY", selectedSource: group.spec },
-    { inputName: "yGroupBy", selectedSource: group.spec },
     { inputName: "ySortBy", selectedSource: rank.spec },
   ];
 }

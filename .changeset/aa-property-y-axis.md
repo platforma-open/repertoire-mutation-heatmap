@@ -5,4 +5,4 @@
 "@platforma-open/milaboratories.repertoire-mutation-heatmap.model": minor
 ---
 
-MILAB-7057: group amino acid rows on the heat maps by property, with a coloured track beside the Y axis
+MILAB-7057: order amino acid rows on the heat maps by property, with a coloured track beside the Y axis
