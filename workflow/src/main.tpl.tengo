@@ -38,7 +38,7 @@ pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
 // track's 0-6.
 AA_GROUPS := [
 	{ label: "Positive", residues: ["H", "K", "R"], colour: 19 },
-	{ label: "Negative", residues: ["D", "E"], colour: 22 },
+	{ label: "Negative", residues: ["D", "E"], colour: 8 },
 	{ label: "Polar-neutral", residues: ["C", "N", "Q", "S", "T"], colour: 10 },
 	{ label: "Non-polar", residues: ["A", "I", "L", "V", "M"], colour: 25 },
 	{ label: "Aromatic", residues: ["F", "W", "Y"], colour: 7 },
@@ -50,7 +50,7 @@ AA_GROUPS := [
 AA_OTHER_GROUP := { label: "Other", colour: 15 }
 // Outer hydropathy level for a second Y-axis track. Stop, deletion and other states get none.
 AA_HYDROPATHY := [
-	{ label: "Hydrophobic", residues: ["F", "W", "Y", "P", "M", "I", "L", "V", "A", "G"], colour: 8 },
+	{ label: "Hydrophobic", residues: ["F", "W", "Y", "P", "M", "I", "L", "V", "A", "G"], colour: 22 },
 	{ label: "Hydrophilic", residues: ["C", "S", "T", "N", "Q", "D", "E", "H", "K", "R"], colour: 20 }
 ]
 
