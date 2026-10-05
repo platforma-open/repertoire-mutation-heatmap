@@ -393,6 +393,13 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     landscapePanelsFrom(outputPColumns(ctx, "singleMutantHeatmapPf")),
   )
 
+  // Single-mutant variants of the selected parent in the last run. Undefined until a run with
+  // score columns has finished.
+  .output("singleMutantCount", (ctx) => {
+    return ctx.outputs?.resolve("singleMutantCount")?.getDataAsJson<{ singleMutantCount: number }>()
+      ?.singleMutantCount;
+  })
+
   // --- Drill-down outputs (per-position variant browsing) ---
 
   // Partner map: [mutationId, position, state] -> cellValue, one value column per score, plus

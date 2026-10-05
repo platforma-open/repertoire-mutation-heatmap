@@ -503,6 +503,11 @@ wf.body(func(args) {
 		// variant, at the position/residue of its own substitution.
 		singleMutCells := allMutCells.join(singleMutants, { on: "variantKey", how: "inner" })
 
+		// Zero means the landscape has nothing to draw, and the UI says so instead of an empty grid.
+		singleMutCells.
+			select(pt.col("variantKey").count().alias("singleMutantCount")).
+			saveContent("singleMutantCount.ndjson")
+
 		// parentId is dropped again below; kept here so the landscape select is unchanged.
 		mutCells := singleMutCells.
 			select(pt.col("variantKey"), pt.col("parentId"), pt.col("position"), pt.col("state"))
@@ -1168,6 +1173,7 @@ wf.body(func(args) {
 			lsPf.add("coOccurrence/" + k, trace.inject(v.spec), v.data)
 		}
 		outputs.singleMutantHeatmapPf = pframes.exportFrame(lsPf.build())
+		outputs.singleMutantCount = ptResult.getFileContent("singleMutantCount.ndjson")
 
 		// --- Drill-down import + export ---
 		// Partner map: [mutationId, position, state] -> cellValue, one value column per score.

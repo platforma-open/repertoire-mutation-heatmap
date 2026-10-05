@@ -261,6 +261,25 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
   return options;
 });
 
+// The landscape draws single-mutant variants only. With none, the dense grid would render as an
+// empty map, so the placeholder chart takes over and says why. A settled output with no frame is
+// what makes graph-maker show its `noPframe` screen, with the Settings drawer still reachable.
+const noSingleMutants = computed(() => app.model.outputs.singleMutantCount === 0);
+// The output type promises a frame once settled; graph-maker checks for a missing one at runtime.
+const NO_FRAME = {
+  ok: true,
+  value: undefined,
+  stable: true,
+} as unknown as typeof app.model.outputs.singleMutantHeatmapPf;
+const placeholderFrame = computed(() =>
+  noSingleMutants.value ? NO_FRAME : app.model.outputs.singleMutantHeatmapPf,
+);
+const placeholderTitle = computed(() =>
+  noSingleMutants.value
+    ? "No single mutants for the selected parent. The landscape shows variants with exactly one mutation"
+    : "Select a dataset and score columns in Settings, then Run",
+);
+
 /** Bound to both the visible hint and its `title`, so an edit cannot leave the two disagreeing. */
 const CLICK_HINT = "Click a cell to browse variants carrying that substitution";
 </script>
@@ -290,7 +309,7 @@ const CLICK_HINT = "Click a cell to browse variants carrying that substitution";
   </div>
 
   <GraphMaker
-    v-if="activePanel"
+    v-if="activePanel && !noSingleMutants"
     :key="activePanel.key"
     v-model="app.model.data.singleMutantHeatmapStates[activePanel.key]"
     chartType="heatmap"
@@ -314,16 +333,14 @@ const CLICK_HINT = "Click a cell to browse variants carrying that substitution";
   </GraphMaker>
 
   <!-- Placeholder: carries the empty state and the Settings drawer, which on a fresh block is
-       the only way in to pick a dataset. -->
+       the only way in to pick a dataset. Also stands in when the run found no single mutants. -->
   <GraphMaker
     v-else
     v-model="app.model.data.singleMutantHeatmapState"
     chartType="heatmap"
-    :p-frame="app.model.outputs.singleMutantHeatmapPf"
+    :p-frame="placeholderFrame"
     :defaultPalette="{ categorical: 'triadic' }"
-    :status-text="{
-      noPframe: { title: 'Select a dataset and score columns in Settings, then Run' },
-    }"
+    :status-text="{ noPframe: { title: placeholderTitle } }"
   >
     <template #settingsSlot>
       <Settings />
