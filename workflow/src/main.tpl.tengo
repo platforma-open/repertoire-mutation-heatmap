@@ -34,24 +34,25 @@ pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
 // map order and groups, with M moved from Polar-neutral to Non-polar (it is hydrophobic) and
 // "(+)"/"(-)" spelled out for the legend. Each group then sits inside one hydropathy class.
 // The rows follow the rank built from this list; `pl7.app/discreteValues` gives the legend the
-// same order. `colour` is an index into graph-maker's `triadic` palette, kept clear of the region
-// track's 0-6.
+// same order. `colour` is an index into graph-maker's `paired` palette, avoiding the red and blue
+// the hydropathy track uses.
 AA_GROUPS := [
-	{ label: "Positive", residues: ["H", "K", "R"], colour: 19 },
-	{ label: "Negative", residues: ["D", "E"], colour: 8 },
-	{ label: "Polar-neutral", residues: ["C", "N", "Q", "S", "T"], colour: 10 },
-	{ label: "Non-polar", residues: ["A", "I", "L", "V", "M"], colour: 25 },
+	{ label: "Positive", residues: ["H", "K", "R"], colour: 3 },
+	{ label: "Negative", residues: ["D", "E"], colour: 5 },
+	{ label: "Polar-neutral", residues: ["C", "N", "Q", "S", "T"], colour: 1 },
+	{ label: "Non-polar", residues: ["A", "I", "L", "V", "M"], colour: 17 },
 	{ label: "Aromatic", residues: ["F", "W", "Y"], colour: 7 },
-	{ label: "Unique", residues: ["G", "P"], colour: 16 },
-	{ label: "Stop", residues: ["*"], colour: 13 },
-	{ label: "Deletion", residues: ["-"], colour: 24 }
+	{ label: "Unique", residues: ["G", "P"], colour: 11 },
+	{ label: "Stop", residues: ["*"], colour: 9 },
+	{ label: "Deletion", residues: ["-"], colour: 16 }
 ]
 // Insertions (multi-letter states) and unknown residues.
-AA_OTHER_GROUP := { label: "Other", colour: 15 }
+AA_OTHER_GROUP := { label: "Other", colour: 2 }
 // Outer hydropathy level for a second Y-axis track. Stop, deletion and other states get none.
+// `colour` is an index into graph-maker's `bright` palette: red hydrophobic, blue hydrophilic.
 AA_HYDROPATHY := [
-	{ label: "Hydrophobic", residues: ["F", "W", "Y", "P", "M", "I", "L", "V", "A", "G"], colour: 22 },
-	{ label: "Hydrophilic", residues: ["C", "S", "T", "N", "Q", "D", "E", "H", "K", "R"], colour: 20 }
+	{ label: "Hydrophobic", residues: ["F", "W", "Y", "P", "M", "I", "L", "V", "A", "G"], colour: 7 },
+	{ label: "Hydrophilic", residues: ["C", "S", "T", "N", "Q", "D", "E", "H", "K", "R"], colour: 6 }
 ]
 
 // Join keys must stay byte-identical to the profiler's emitted axis names.
@@ -948,7 +949,7 @@ wf.body(func(args) {
 								"pl7.app/label": "AA property",
 								"pl7.app/discreteValues": string(json.encode(aaGroupOrder)),
 								"pl7.app/graph/palette": string(canonical.encode({
-									name: "triadic",
+									name: "paired",
 									mapping: aaGroupColours
 								}))
 							}
@@ -994,7 +995,7 @@ wf.body(func(args) {
 							"pl7.app/label": "Hydropathy",
 							"pl7.app/discreteValues": string(json.encode(hydropathyOrder)),
 							"pl7.app/graph/palette": string(canonical.encode({
-								name: "triadic",
+								name: "bright",
 								mapping: hydropathyColours
 							}))
 						}
