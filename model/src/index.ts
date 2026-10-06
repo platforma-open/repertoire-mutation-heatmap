@@ -13,6 +13,7 @@ import {
   withGradientReseeded,
   withParentOnXAxis,
   withRegionColoursReseeded,
+  withYAnnotationTitleAtBottom,
 } from "./chart-state";
 import { dedupByLeafId, exactMatch, outputPColumns, poolSpecByRef } from "./render-utils";
 import { drillDownTableModel } from "./drill-down-table";
@@ -43,6 +44,7 @@ export {
   withGradientReseeded,
   withParentOnXAxis,
   withRegionColoursReseeded,
+  withYAnnotationTitleAtBottom,
 } from "./chart-state";
 // `createPlDataTableV3`'s return type reaches into `Nil` from helpers, and TS cannot name it
 // from here without this — the same re-export every block building a table carries.
@@ -190,31 +192,19 @@ const dataModel = new DataModelBuilder({ kind })
     drillDownTableState: createPlDataTableStateV2(),
     ...mapChartStates(v4, withRegionColoursReseeded),
   }))
-  // Let the landscape value column's declared gradient take effect on charts that predate it.
-  // graph-maker seeds a gradient once and leaves an existing mapping alone, so without this a
-  // saved chart keeps the scale it built for itself and the declared midpoint never applies.
-  //
-  // Only the landscape states. The composition map declares no `pl7.app/graph/palette`, so
-  // reseeding it would drop a mapping for nothing, and the drill-down's pair column declares none
-  // either — hence neither `mapChartStates` nor `drillDownChartState` here.
+  // The Y-axis amino acid tracks: their titles go below the map, on every saved chart.
   .migrate<BlockDataV6>("v6", (v5) => ({
     ...v5,
-    singleMutantHeatmapState: withGradientReseeded(v5.singleMutantHeatmapState),
-    singleMutantHeatmapStates: Object.fromEntries(
-      Object.entries(v5.singleMutantHeatmapStates).map(([key, state]) => [
-        key,
-        withGradientReseeded(state),
-      ]),
-    ),
+    ...mapChartStates(v5, withYAnnotationTitleAtBottom),
+    drillDownChartState: withYAnnotationTitleAtBottom(v5.drillDownChartState),
   }))
-  // Again, because the declared palette itself changed — from a bounded linear scale centred on
-  // the baseline to an unbounded log one. A chart seeded by `v6` holds a mapping built from the
-  // old declaration, and a seeded source is never revisited, so without this it keeps a scale
-  // that sent a quarter of its cells off the palette end.
+  // Let the landscape value column's declared gradient take effect on charts that predate it.
+  // graph-maker seeds a gradient once and leaves an existing mapping alone, so without this a
+  // saved chart keeps the scale it built for itself and the declaration never applies.
   //
-  // Worth knowing for next time: every change to a declared palette needs its own reseed, because
-  // the seeding is once-only. The two steps are kept apart rather than folded together so a
-  // project that stopped at `v6` still lands correctly.
+  // Only the landscape states. The composition map declares no `pl7.app/graph/palette`, so
+  // reseeding it would drop a mapping for nothing, and the drill-down's pair column declares
+  // none either — hence neither `mapChartStates` nor `drillDownChartState` here.
   .migrate<BlockData>("v7", (v6) => ({
     ...v6,
     singleMutantHeatmapState: withGradientReseeded(v6.singleMutantHeatmapState),
@@ -269,6 +259,7 @@ const dataModel = new DataModelBuilder({ kind })
         axisY: {
           hideAxisLabels: false,
           cellSize: 20,
+          annotationTitlePosition: "bottom",
         },
       },
     },
@@ -461,6 +452,13 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   .output("landscapePanels", (ctx): LandscapePanel[] | undefined =>
     landscapePanelsFrom(outputPColumns(ctx, "singleMutantHeatmapPf")),
   )
+
+  // Single-mutant variants of the selected parent in the last run. Undefined until a run with
+  // score columns has finished.
+  .output("singleMutantCount", (ctx) => {
+    return ctx.outputs?.resolve("singleMutantCount")?.getDataAsJson<{ singleMutantCount: number }>()
+      ?.singleMutantCount;
+  })
 
   // --- Drill-down outputs (per-position variant browsing) ---
 

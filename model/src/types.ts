@@ -135,7 +135,7 @@ export type BlockDataV4 = Omit<
   "drillDowns" | "activeDrillDown" | "drillDownChartState" | "drillDownTableState"
 >;
 
-/** Data version `v5`: the shape as it stands; `v6` only rewrites landscape chart states. */
+/** Data version `v5`: today's shape; `v6` only rewrites chart states. */
 export type BlockDataV5 = BlockData;
 
 /** Data version `v6`: the same shape again; `v7` only rewrites landscape chart states. */

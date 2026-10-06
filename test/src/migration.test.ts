@@ -10,6 +10,7 @@ import {
   withParentOnXAxis,
   withRegionColoursReseeded,
   withGradientReseeded,
+  withYAnnotationTitleAtBottom,
 } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import { describe, expect, test } from "vitest";
 
@@ -125,6 +126,20 @@ describe("makeDrillDownChartState", () => {
 
   test("carries no title of its own — the page header above it already names the chart", () => {
     expect(makeDrillDownChartState().title).toBe("");
+  });
+});
+
+describe("withYAnnotationTitleAtBottom", () => {
+  test("moves a saved chart's Y track titles to the bottom and keeps its other axis settings", () => {
+    const state = withYAnnotationTitleAtBottom(savedChart([REGION]));
+    expect(state.axesSettings?.axisY?.annotationTitlePosition).toBe("bottom");
+    expect(state.axesSettings?.axisX?.cellSize).toBe(20);
+  });
+});
+
+describe("Y annotation track title", () => {
+  test("new charts show the Y track titles at the bottom", () => {
+    expect(makeDrillDownChartState().axesSettings?.axisY?.annotationTitlePosition).toBe("bottom");
   });
 });
 

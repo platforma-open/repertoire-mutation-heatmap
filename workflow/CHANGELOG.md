@@ -1,5 +1,18 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.workflow
 
+## 1.1.8
+
+### Patch Changes
+
+- 99b7ec7: MILAB-7057: order amino acid rows on the heat maps by property, with a coloured track beside the Y axis
+- f98ae85: MILAB-7057: say so on the landscape page when the selected parent has no single mutants, instead of drawing an empty map
+
+## 1.1.7
+
+### Patch Changes
+
+- 4d6dda2: Clear selected score and enrichment columns on dataset change
+
 ## 1.1.6
 
 ### Patch Changes

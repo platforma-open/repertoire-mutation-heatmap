@@ -9,6 +9,7 @@ import { getUniqueSourceValuesWithLabels } from "@platforma-sdk/model";
 import type { PObjectId } from "@platforma-sdk/model";
 import { PlNotificationAlert } from "@platforma-sdk/ui-vue";
 import { computed, ref, watch } from "vue";
+import { aaPropertyOptions } from "./aaPropertyOptions";
 import { useApp } from "./app";
 import { useDrillDowns } from "./drillDown";
 import Settings from "./Settings.vue";
@@ -236,6 +237,7 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
     { inputName: "x", selectedSource: axes[0] }, // position
     ...parentAxisOption.value, // then parent residue, so the label reads "position, parent"
     { inputName: "y", selectedSource: axes[1] }, // state
+    ...aaPropertyOptions(app.model.outputs.singleMutantHeatmapPCols),
     { inputName: "tooltipContent", selectedSource: axes[1] }, // show State in the tooltip
     ...coOccurrenceOption.value,
     ...regionOption.value,
@@ -259,36 +261,32 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
   return options;
 });
 
+// The landscape draws single-mutant variants only. With none, the dense grid would render as an
+// empty map, so the placeholder chart takes over and says why. A settled output with no frame is
+// what makes graph-maker show its `noPframe` screen, with the Settings drawer still reachable.
+const noSingleMutants = computed(() => app.model.outputs.singleMutantCount === 0);
+// The output type promises a frame once settled; graph-maker checks for a missing one at runtime.
+const NO_FRAME = {
+  ok: true,
+  value: undefined,
+  stable: true,
+} as unknown as typeof app.model.outputs.singleMutantHeatmapPf;
+const placeholderFrame = computed(() =>
+  noSingleMutants.value ? NO_FRAME : app.model.outputs.singleMutantHeatmapPf,
+);
+const placeholderTitle = computed(() =>
+  noSingleMutants.value
+    ? "No single mutants for the selected parent. The landscape shows variants with exactly one mutation"
+    : "Select a dataset and score columns in Settings, then Run",
+);
+
 /** Bound to both the visible hint and its `title`, so an edit cannot leave the two disagreeing. */
 const CLICK_HINT = "Click a cell to browse variants carrying that substitution";
 </script>
 
 <template>
-  <!--
-    `categorical: 'triadic'` matches the synthetic-repertoire-profiler block, whose state
-    heat map renders the same two annotation tracks. It is the only categorical palette
-    with enough colours for a residue alphabet: it carries all 27 base colours, where
-    light/bright/dark carry 9 each and paired 18. Discrete colours are assigned
-    `colors[idx % colors.length]`, so the 9-colour default reuses a colour every 9th
-    residue — visible repetition across the 20 residues plus gap on the Parent AA track.
-    Past 27 distinct states it still wraps; graph-maker honours only a palette NAME for
-    annotation tracks, not an explicit residue->colour map.
-
-    `:key` forces a fresh GraphMaker per score: its store is seeded from the state object at
-    setup, so swapping the bound state without remounting would carry the previous score's
-    settings over and write them into the new score's state.
-  -->
-  <!-- Floated over the chart, not stacked above it: the same fixed bottom-right corner and the
-       same component graph-maker uses for its own truncation and export warnings, so the block
-       does not invent a second notification style. A full-width banner also displaced the plot. -->
-  <div v-if="clickNotice" :class="$style.alerts">
-    <PlNotificationAlert v-model="noticeOpen" type="warning" closable>
-      {{ clickNotice }}
-    </PlNotificationAlert>
-  </div>
-
   <GraphMaker
-    v-if="activePanel"
+    v-if="activePanel && !noSingleMutants"
     :key="activePanel.key"
     v-model="app.model.data.singleMutantHeatmapStates[activePanel.key]"
     chartType="heatmap"
@@ -312,21 +310,42 @@ const CLICK_HINT = "Click a cell to browse variants carrying that substitution";
   </GraphMaker>
 
   <!-- Placeholder: carries the empty state and the Settings drawer, which on a fresh block is
-       the only way in to pick a dataset. -->
+       the only way in to pick a dataset. Also stands in when the run found no single mutants. -->
   <GraphMaker
     v-else
     v-model="app.model.data.singleMutantHeatmapState"
     chartType="heatmap"
-    :p-frame="app.model.outputs.singleMutantHeatmapPf"
+    :p-frame="placeholderFrame"
     :defaultPalette="{ categorical: 'triadic' }"
-    :status-text="{
-      noPframe: { title: 'Select a dataset and score columns in Settings, then Run' },
-    }"
+    :status-text="{ noPframe: { title: placeholderTitle } }"
   >
     <template #settingsSlot>
       <Settings />
     </template>
   </GraphMaker>
+
+  <!--
+    `categorical: 'triadic'` matches the synthetic-repertoire-profiler block, whose state
+    heat map renders the same two annotation tracks. It is the only categorical palette
+    with enough colours for a residue alphabet: it carries all 27 base colours, where
+    light/bright/dark carry 9 each and paired 18. Discrete colours are assigned
+    `colors[idx % colors.length]`, so the 9-colour default reuses a colour every 9th
+    residue — visible repetition across the 20 residues plus gap on the Parent AA track.
+    Past 27 distinct states it still wraps; graph-maker honours only a palette NAME for
+    annotation tracks, not an explicit residue->colour map.
+
+    `:key` forces a fresh GraphMaker per score: its store is seeded from the state object at
+    setup, so swapping the bound state without remounting would carry the previous score's
+    settings over and write them into the new score's state.
+  -->
+  <!-- Floated over the chart, not stacked above it: the same fixed bottom-right corner and the
+       same component graph-maker uses for its own truncation and export warnings, so the block
+       does not invent a second notification style. A full-width banner also displaced the plot. -->
+  <div v-if="clickNotice" :class="$style.alerts">
+    <PlNotificationAlert v-model="noticeOpen" type="warning" closable>
+      {{ clickNotice }}
+    </PlNotificationAlert>
+  </div>
 </template>
 
 <style module>
