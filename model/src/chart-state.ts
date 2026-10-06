@@ -198,6 +198,20 @@ export function withParentOnXAxis(state: GraphMakerState): GraphMakerState {
   };
 }
 
+/**
+ * Puts the Y annotation track titles at the bottom on a saved chart. Axes settings are seeded once,
+ * when a chart is created, so a chart saved before the Y-axis tracks keeps the default (top).
+ */
+export function withYAnnotationTitleAtBottom(state: GraphMakerState): GraphMakerState {
+  return {
+    ...state,
+    axesSettings: {
+      ...state.axesSettings,
+      axisY: { ...state.axesSettings?.axisY, annotationTitlePosition: "bottom" },
+    },
+  };
+}
+
 /** Applies a rewrite to every chart state the block keeps. */
 type ChartStates = Pick<
   BlockData,
