@@ -12,6 +12,7 @@ import {
   withEmptyNAValue,
   withParentOnXAxis,
   withRegionColoursReseeded,
+  withYAnnotationTitleAtBottom,
 } from "./chart-state";
 import { dedupByLeafId, exactMatch, outputPColumns, poolSpecByRef } from "./render-utils";
 import { drillDownTableModel } from "./drill-down-table";
@@ -29,6 +30,7 @@ import type {
   BlockDataV2,
   BlockDataV3,
   BlockDataV4,
+  BlockDataV5,
   LandscapePanel,
 } from "./types";
 
@@ -39,6 +41,7 @@ export {
   makeLandscapeChartState,
   withParentOnXAxis,
   withRegionColoursReseeded,
+  withYAnnotationTitleAtBottom,
 } from "./chart-state";
 // `createPlDataTableV3`'s return type reaches into `Nil` from helpers, and TS cannot name it
 // from here without this — the same re-export every block building a table carries.
@@ -150,12 +153,18 @@ const dataModel = new DataModelBuilder({ kind })
   // region colour mapping so the palette the region column now declares can seed it. Without
   // that last part a chart keeps whatever mapping it built for itself, and a landscape and a
   // drill-down go on colouring the same region differently.
-  .migrate<BlockData>("v5", (v4) => ({
+  .migrate<BlockDataV5>("v5", (v4) => ({
     ...v4,
     drillDowns: [],
     drillDownChartState: makeDrillDownChartState(),
     drillDownTableState: createPlDataTableStateV2(),
     ...mapChartStates(v4, withRegionColoursReseeded),
+  }))
+  // The Y-axis amino acid tracks: their titles go below the map, on every saved chart.
+  .migrate<BlockData>("v6", (v5) => ({
+    ...v5,
+    ...mapChartStates(v5, withYAnnotationTitleAtBottom),
+    drillDownChartState: withYAnnotationTitleAtBottom(v5.drillDownChartState),
   }))
   .init(() => ({
     drillDowns: [],
@@ -201,6 +210,7 @@ const dataModel = new DataModelBuilder({ kind })
         axisY: {
           hideAxisLabels: false,
           cellSize: 20,
+          annotationTitlePosition: "bottom",
         },
       },
     },
@@ -391,6 +401,13 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   .output("landscapePanels", (ctx): LandscapePanel[] | undefined =>
     landscapePanelsFrom(outputPColumns(ctx, "singleMutantHeatmapPf")),
   )
+
+  // Single-mutant variants of the selected parent in the last run. Undefined until a run with
+  // score columns has finished.
+  .output("singleMutantCount", (ctx) => {
+    return ctx.outputs?.resolve("singleMutantCount")?.getDataAsJson<{ singleMutantCount: number }>()
+      ?.singleMutantCount;
+  })
 
   // --- Drill-down outputs (per-position variant browsing) ---
 

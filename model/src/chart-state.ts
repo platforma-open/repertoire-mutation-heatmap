@@ -39,6 +39,8 @@ export function makeLandscapeChartState(
       axisY: {
         hideAxisLabels: false,
         cellSize: 20,
+        // Below the plot, so the two Y-axis tracks are named without a band above the map.
+        annotationTitlePosition: "bottom",
       },
     },
   };
@@ -192,6 +194,20 @@ export function withParentOnXAxis(state: GraphMakerState): GraphMakerState {
     axesSettings: {
       ...state.axesSettings,
       axisX: { ...state.axesSettings?.axisX, axisLabelsAngle: 45 },
+    },
+  };
+}
+
+/**
+ * Puts the Y annotation track titles at the bottom on a saved chart. Axes settings are seeded once,
+ * when a chart is created, so a chart saved before the Y-axis tracks keeps the default (top).
+ */
+export function withYAnnotationTitleAtBottom(state: GraphMakerState): GraphMakerState {
+  return {
+    ...state,
+    axesSettings: {
+      ...state.axesSettings,
+      axisY: { ...state.axesSettings?.axisY, annotationTitlePosition: "bottom" },
     },
   };
 }

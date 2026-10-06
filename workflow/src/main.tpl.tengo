@@ -16,7 +16,8 @@
 // [round, parentId, position, state] -> log2fc. Needs at least two rounds.
 //
 // Both maps ride alongside two position-keyed annotation tracks — region membership and the
-// parent residue — which GraphMaker renders under the X axis.
+// parent residue — which GraphMaker renders under the X axis. For amino acids, a state-keyed
+// property track groups and orders the residue rows on the Y axis.
 
 wf := import("@platforma-sdk/workflow-tengo:workflow")
 xsv := import("@platforma-sdk/workflow-tengo:pframes.xsv")
@@ -24,9 +25,35 @@ pframes := import("@platforma-sdk/workflow-tengo:pframes")
 pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
 pt := import("@platforma-sdk/workflow-tengo:pt")
 maps := import("@platforma-sdk/workflow-tengo:maps")
+canonical := import("@platforma-sdk/workflow-tengo:canonical")
 json := import("json")
 units := import("@platforma-sdk/workflow-tengo:units")
 pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
+
+// Amino acid property groups for the Y-axis track, in display order: Enrich2's sequence-function
+// map order and groups, with M moved from Polar-neutral to Non-polar (it is hydrophobic) and
+// "(+)"/"(-)" spelled out for the legend. Each group then sits inside one hydropathy class.
+// The rows follow the rank built from this list; `pl7.app/discreteValues` gives the legend the
+// same order. `colour` is an index into graph-maker's `paired` palette, avoiding the red and blue
+// the hydropathy track uses.
+AA_GROUPS := [
+	{ label: "Positive", residues: ["H", "K", "R"], colour: 3 },
+	{ label: "Negative", residues: ["D", "E"], colour: 5 },
+	{ label: "Polar-neutral", residues: ["C", "N", "Q", "S", "T"], colour: 1 },
+	{ label: "Non-polar", residues: ["A", "I", "L", "V", "M"], colour: 17 },
+	{ label: "Aromatic", residues: ["F", "W", "Y"], colour: 7 },
+	{ label: "Unique", residues: ["G", "P"], colour: 11 },
+	{ label: "Stop", residues: ["*"], colour: 9 },
+	{ label: "Deletion", residues: ["-"], colour: 16 }
+]
+// Insertions (multi-letter states) and unknown residues.
+AA_OTHER_GROUP := { label: "Other", colour: 2 }
+// Outer hydropathy level for a second Y-axis track. Stop, deletion and other states get none.
+// `colour` is an index into graph-maker's `bright` palette: red hydrophobic, blue hydrophilic.
+AA_HYDROPATHY := [
+	{ label: "Hydrophobic", residues: ["F", "W", "Y", "P", "M", "I", "L", "V", "A", "G"], colour: 7 },
+	{ label: "Hydrophilic", residues: ["C", "S", "T", "N", "Q", "D", "E", "H", "K", "R"], colour: 6 }
+]
 
 // Join keys must stay byte-identical to the profiler's emitted axis names.
 VARIANT_KEY_AXIS := "pl7.app/variantKey"
@@ -169,6 +196,7 @@ wf.body(func(args) {
 	})
 	// Y-axis (state) label, alphabet-aware: residues for the aa matrix, bases for nt.
 	stateAxisLabel := (alphabet == "aminoacid") ? "Amino Acids" : "Nucleotides"
+	hasAaProperties := alphabet == "aminoacid"
 
 	// The landscape's cell is (position, state). Its parent-residue cell holds a value only when
 	// the dataset has a WT variant: a single mutant differs from its parent, so no single mutant
@@ -358,6 +386,53 @@ wf.body(func(args) {
 		withColumns(pt.lit(1).alias("isParentResidue"))
 	parentFlagLandscapeDf.save("parentResidueFlagLandscape.tsv")
 
+	// --- Amino acid property track ---
+	// [state] -> group and rank, for every state the matrix carries. The rank orders the rows.
+	if hasAaProperties {
+		groupExpr := undefined
+		rankExpr := undefined
+		rank := 0
+		for group in AA_GROUPS {
+			inGroup := pt.col("state").inSet(group.residues...)
+			groupExpr = is_undefined(groupExpr) ? pt.when(inGroup) : groupExpr.when(inGroup)
+			groupExpr = groupExpr.then(pt.lit(group.label))
+			for residue in group.residues {
+				rank += 1
+				isResidue := pt.col("state").eq(pt.lit(residue))
+				rankExpr = is_undefined(rankExpr) ? pt.when(isResidue) : rankExpr.when(isResidue)
+				rankExpr = rankExpr.then(pt.lit(rank))
+			}
+		}
+		smDf.
+			groupBy("state").
+			agg(pt.col("variantKey").count().alias("n")).
+			select(
+				pt.col("state"),
+				groupExpr.otherwise(pt.lit(AA_OTHER_GROUP.label)).alias("aaGroup"),
+				rankExpr.otherwise(pt.lit(rank + 1)).alias("aaRank")
+			).
+			save("aaPropertyByState.tsv")
+
+		hydropathyExpr := undefined
+		hydropathyResidues := []
+		for class in AA_HYDROPATHY {
+			inClass := pt.col("state").inSet(class.residues...)
+			hydropathyExpr = is_undefined(hydropathyExpr) ? pt.when(inClass) : hydropathyExpr.when(inClass)
+			hydropathyExpr = hydropathyExpr.then(pt.lit(class.label))
+			hydropathyResidues = append(hydropathyResidues, class.residues...)
+		}
+		// Only the 20 residues, so the other states carry no value and draw no colour.
+		smDf.
+			groupBy("state").
+			agg(pt.col("variantKey").count().alias("n")).
+			filter(pt.col("state").inSet(hydropathyResidues...)).
+			select(
+				pt.col("state"),
+				hydropathyExpr.otherwise(pt.lit("")).alias("aaHydropathy")
+			).
+			save("aaHydropathyByState.tsv")
+	}
+
 	// --- Mutation landscape precalc (optional) ---
 	// The singleton cell mode: a cell holds the value of the ONE single-mutant variant carrying
 	// exactly that substitution, taken directly with no aggregation. The alternative would be a
@@ -428,6 +503,11 @@ wf.body(func(args) {
 		// [variantKey, parentId, position, state, mutationId] — one row per single-mutant
 		// variant, at the position/residue of its own substitution.
 		singleMutCells := allMutCells.join(singleMutants, { on: "variantKey", how: "inner" })
+
+		// Zero means the landscape has nothing to draw, and the UI says so instead of an empty grid.
+		singleMutCells.
+			select(pt.col("variantKey").count().alias("singleMutantCount")).
+			saveContent("singleMutantCount.ndjson")
 
 		// parentId is dropped again below; kept here so the landscape select is unchanged.
 		mutCells := singleMutCells.
@@ -843,6 +923,90 @@ wf.body(func(args) {
 			{ splitDataAndSpec: true }
 		)
 	}
+	// Amino acid property track: [state] -> group (the Y-axis track) and [state] -> rank (the
+	// row order). Keyed on the state axis without its
+	// dense annotation; identity ignores annotations, so it still joins the value columns.
+	aaPropertyCols := undefined
+	if hasAaProperties {
+		aaGroupColours := {}
+		aaGroupOrder := []
+		for group in append(AA_GROUPS, AA_OTHER_GROUP) {
+			aaGroupColours[group.label] = group.colour
+			aaGroupOrder = append(aaGroupOrder, group.label)
+		}
+		aaPropertyCols = xsv.importFile(
+			ptResult.getFile("aaPropertyByState.tsv"),
+			"tsv",
+			{
+				axes: [{ column: "state", spec: stateAxisSpecBase }],
+				columns: [
+					{
+						column: "aaGroup",
+						spec: {
+							name: "pl7.app/repertoire/aaPropertyGroup",
+							valueType: "String",
+							annotations: {
+								"pl7.app/label": "AA property",
+								"pl7.app/discreteValues": string(json.encode(aaGroupOrder)),
+								"pl7.app/graph/palette": string(canonical.encode({
+									name: "paired",
+									mapping: aaGroupColours
+								}))
+							}
+						}
+					},
+					{
+						column: "aaRank",
+						spec: {
+							name: "pl7.app/repertoire/aaPropertyRank",
+							valueType: "Int",
+							annotations: {
+								"pl7.app/label": "AA property order"
+							}
+						}
+					}
+				],
+				storageFormat: "Parquet",
+				partitionKeyLength: 0
+			},
+			{ splitDataAndSpec: true }
+		)
+	}
+	// Hydropathy track: [state] -> hydrophobic / hydrophilic, a second Y-axis track.
+	aaHydropathyCols := undefined
+	if hasAaProperties {
+		hydropathyColours := {}
+		hydropathyOrder := []
+		for class in AA_HYDROPATHY {
+			hydropathyColours[class.label] = class.colour
+			hydropathyOrder = append(hydropathyOrder, class.label)
+		}
+		aaHydropathyCols = xsv.importFile(
+			ptResult.getFile("aaHydropathyByState.tsv"),
+			"tsv",
+			{
+				axes: [{ column: "state", spec: stateAxisSpecBase }],
+				columns: [{
+					column: "aaHydropathy",
+					spec: {
+						name: "pl7.app/repertoire/aaHydropathy",
+						valueType: "String",
+						annotations: {
+							"pl7.app/label": "Hydropathy",
+							"pl7.app/discreteValues": string(json.encode(hydropathyOrder)),
+							"pl7.app/graph/palette": string(canonical.encode({
+								name: "bright",
+								mapping: hydropathyColours
+							}))
+						}
+					}
+				}],
+				storageFormat: "Parquet",
+				partitionKeyLength: 0
+			},
+			{ splitDataAndSpec: true }
+		)
+	}
 	// Parent-residue track: [position] -> parentResidue, keyed on the same position axis as the
 	// value columns. String value → discrete annotation coloured by residue; the residue shows
 	// in the tooltip. Added to the same frames as the region track, which the UI presets as
@@ -932,6 +1096,14 @@ wf.body(func(args) {
 		for k, v in parentCols {
 			lsPf.add("parent/" + k, trace.inject(v.spec), v.data)
 		}
+		if hasAaProperties {
+			for k, v in aaPropertyCols {
+				lsPf.add("aaProperty/" + k, trace.inject(v.spec), v.data)
+			}
+			for k, v in aaHydropathyCols {
+				lsPf.add("aaHydropathy/" + k, trace.inject(v.spec), v.data)
+			}
+		}
 		// Parent-residue marking, [position, state] -> 1 on the parent cell only. Its axes are
 		// the cell's own, so GraphMaker accepts it as a per-cell source for Highlight; the
 		// non-dense copies are deliberate, since this column has no holes to fill.
@@ -1002,6 +1174,7 @@ wf.body(func(args) {
 			lsPf.add("coOccurrence/" + k, trace.inject(v.spec), v.data)
 		}
 		outputs.singleMutantHeatmapPf = pframes.exportFrame(lsPf.build())
+		outputs.singleMutantCount = ptResult.getFileContent("singleMutantCount.ndjson")
 
 		// --- Drill-down import + export ---
 		// Partner map: [mutationId, position, state] -> cellValue, one value column per score.
@@ -1128,6 +1301,14 @@ wf.body(func(args) {
 		}
 		for k, v in parentCols {
 			ddPf.add("parent/" + k, trace.inject(v.spec), v.data)
+		}
+		if hasAaProperties {
+			for k, v in aaPropertyCols {
+				ddPf.add("aaProperty/" + k, trace.inject(v.spec), v.data)
+			}
+			for k, v in aaHydropathyCols {
+				ddPf.add("aaHydropathy/" + k, trace.inject(v.spec), v.data)
+			}
 		}
 		outputs.drillDownHeatmapPf = pframes.exportFrame(ddPf.build())
 
@@ -1322,6 +1503,14 @@ wf.body(func(args) {
 		}
 		for k, v in parentCols {
 			compPf.add("parent/" + k, trace.inject(v.spec), v.data)
+		}
+		if hasAaProperties {
+			for k, v in aaPropertyCols {
+				compPf.add("aaProperty/" + k, trace.inject(v.spec), v.data)
+			}
+			for k, v in aaHydropathyCols {
+				compPf.add("aaHydropathy/" + k, trace.inject(v.spec), v.data)
+			}
 		}
 		outputs.compositionHeatmapPf = pframes.exportFrame(compPf.build())
 	}

@@ -14,6 +14,7 @@ import {
   drillDownLabel,
   scoreLabelsByKey,
 } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
+import { aaPropertyOptions } from "./aaPropertyOptions";
 import { useApp } from "./app";
 import { useDrillDowns } from "./drillDown";
 
@@ -140,6 +141,7 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
   if (parentCol) options.push({ inputName: "x", selectedSource: parentCol.spec });
 
   options.push({ inputName: "y", selectedSource: axes[2] }); // state
+  options.push(...aaPropertyOptions(pCols.value));
 
   // What a cell IS: the partner substitution, and the double mutant that carries the pair.
   const partner = companion("pl7.app/repertoire/partnerMutation");
