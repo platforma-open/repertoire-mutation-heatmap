@@ -469,10 +469,6 @@ wf.body(func(args) {
 		// map would put a ratio in one cell of a gate-step map. Hence the match on the score's own
 		// domain, and on that one column name.
 		//
-		// `gateEnrichmentVsBaseline` is deliberately NOT matched. Its cells are already divided by
-		// the per-GATE baseline, so its parent cell would be the per-position baseline over the
-		// per-gate one — a third quantity, and not this column's.
-		//
 		// `pl7.app/block` is compared too: two Sort-Seq blocks in one project emit columns alike in
 		// everything else, and pairing a score from one with a baseline from the other would draw a
 		// map that looks entirely plausible.
