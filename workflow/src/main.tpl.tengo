@@ -856,30 +856,15 @@ wf.body(func(args) {
 				).
 				save(pairFile)
 
-			// The value a variant of no effect takes in this gate. Sort-Seq carries it JSON-encoded
-			// on the enrichment column itself, so this is readable from the spec — no data await,
-			// and no second query.
-			//
-			// It no longer sets the scale's midpoint (see the palette block below for why that
-			// cannot work). What it still does is identify the column: present only on one of
-			// Sort-Seq's per-gate enrichments, on a single-parent run. That is exactly the set of
-			// columns whose scale was measured, so it is what the declared palette is scoped to.
-			// Every other score keeps graph-maker's own default.
-			baselineLevel := undefined
-			if !is_undefined(sSpec) && !is_undefined(sSpec.annotations) {
-				rawLevel := sSpec.annotations["pl7.app/facsBin/baselineLevel"]
-				if !is_undefined(rawLevel) {
-					baselineLevel = json.decode(rawLevel)
-				}
-			}
-
 			scoreMeta = scoreMeta + [{
 				index: i,
 				label: scoreLabel,
 				ref: ref,
 				file: scoreFile,
 				pairFile: pairFile,
-				baselineLevel: baselineLevel
+				// The parent row and the colour scale switch together, on the one condition that
+				// decides what those cells hold.
+				hasBaseline: !is_undefined(baselineEntry)
 			}]
 		}
 	}
@@ -1177,43 +1162,26 @@ wf.body(func(args) {
 				"pl7.app/repertoire/landscapeScoreRef": m.ref,
 				"pl7.app/repertoire/landscapeScoreIndex": string(m.index)
 			}
-			// Centre the gradient on the gate's baseline, so a cell's colour says which side of
-			// "no effect" it falls on rather than where it sits among the other cells.
+			// Log, because an enrichment is multiplicative: half the baseline and twice it sit the
+			// same distance either side. `log` selects d3's `scaleSymlog`, which is defined at
+			// zero, so the cells absent from a gate are covered.
 			//
-			// A diverging palette, because a midpoint on a sequential one is a middle nobody can
-			// see. Declared on the column rather than set on the chart: graph-maker seeds a
-			// mapping from this annotation ONCE and it is the user's afterwards, which is the
-			// behaviour wanted — a default that can be overridden, not a lock.
+			// Sequential: with no midpoint declared, a diverging palette's middle colour would
+			// fall at an arbitrary value and read as "no effect".
 			//
-			// A LOG SCALE, SEQUENTIAL, AND DELIBERATELY NO MIDPOINT. Each of the three is a
-			// finding, so none should be "tidied" back without re-measuring.
+			// Declared on the column, so graph-maker seeds a chart with it and the user can
+			// change it afterwards.
 			//
-			// No midpoint, though centring the scale on the baseline is the obvious thing to
-			// want. Declaring one makes miplots rebuild the domain symmetrically around it in
-			// LINEAR space (`resolveColorDomain.js`): it takes the larger distance to either
-			// bound and returns `[mid - e, mid + e]`, overwriting any `min` passed with it. An
-			// enrichment cannot go below zero, so the floor is non-negative only when
-			// `max <= 2 * mid` — and measured against a real run that put 45% of cells on the
-			// dark floor and sent 24% past `max`. Values beyond a bound are NOT clamped, they
-			// extrapolate off the palette end, so that quarter rendered black and read as
-			// identical to the fully depleted cells. A wider bound only trades it for a wasted
-			// negative half. There is no setting of a midpoint that works here.
+			// Scoped to the scores whose parent row the baseline fills, so the colour scale and
+			// that row switch on one condition.
 			//
-			// Log because an enrichment is multiplicative: half the baseline and twice it should
-			// sit the same distance either side. It also absorbs the shape of the data, where a
-			// third of cells are exactly zero and the median is a third of the baseline. Safe
-			// despite those zeros, which is the second finding: `log` selects d3's `scaleSymlog`,
-			// not `scaleLog`, and symlog is defined at zero.
-			//
-			// Sequential, not diverging, precisely BECAUSE there is no midpoint. A diverging
-			// palette has a visible middle colour, and a reader takes it for "no effect"; with
-			// the midpoint gone it would fall at an arbitrary value and quietly mislead. The
-			// baseline is still in the picture — the parent-residue row carries it at every
-			// position — so the reference is read against that row rather than off the legend.
-			//
-			// No bounds either. Unbounded, nothing extrapolates and nothing renders black; the
-			// symlog spread was measured as good as a bounded one on the same run.
-			if !is_undefined(m.baselineLevel) {
+			// The condition is the column's existence, not the selected parent's rows in it: the
+			// column spans every parent and is filtered to one further down. A multi-parent run
+			// whose alignment verified for some parents and not others therefore carries a column
+			// with no row for the selected one, and that chart gets this scale over a blank parent
+			// row. Knowing otherwise would mean awaiting the data here, which costs every
+			// downstream block its specs.
+			if m.hasBaseline {
 				lsAnnotations["pl7.app/graph/palette"] = string(json.encode({
 					name: "viridis",
 					log: true

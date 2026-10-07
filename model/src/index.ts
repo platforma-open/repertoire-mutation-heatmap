@@ -10,7 +10,6 @@ import {
   makeLandscapeChartState,
   mapChartStates,
   withEmptyNAValue,
-  withGradientReseeded,
   withParentOnXAxis,
   withRegionColoursReseeded,
   withYAnnotationTitleAtBottom,
@@ -32,7 +31,6 @@ import type {
   BlockDataV3,
   BlockDataV4,
   BlockDataV5,
-  BlockDataV6,
   LandscapePanel,
 } from "./types";
 
@@ -41,7 +39,6 @@ export type * from "./types";
 export {
   makeDrillDownChartState,
   makeLandscapeChartState,
-  withGradientReseeded,
   withParentOnXAxis,
   withRegionColoursReseeded,
   withYAnnotationTitleAtBottom,
@@ -193,27 +190,10 @@ const dataModel = new DataModelBuilder({ kind })
     ...mapChartStates(v4, withRegionColoursReseeded),
   }))
   // The Y-axis amino acid tracks: their titles go below the map, on every saved chart.
-  .migrate<BlockDataV6>("v6", (v5) => ({
+  .migrate<BlockData>("v6", (v5) => ({
     ...v5,
     ...mapChartStates(v5, withYAnnotationTitleAtBottom),
     drillDownChartState: withYAnnotationTitleAtBottom(v5.drillDownChartState),
-  }))
-  // Let the landscape value column's declared gradient take effect on charts that predate it.
-  // graph-maker seeds a gradient once and leaves an existing mapping alone, so without this a
-  // saved chart keeps the scale it built for itself and the declaration never applies.
-  //
-  // Only the landscape states. The composition map declares no `pl7.app/graph/palette`, so
-  // reseeding it would drop a mapping for nothing, and the drill-down's pair column declares
-  // none either — hence neither `mapChartStates` nor `drillDownChartState` here.
-  .migrate<BlockData>("v7", (v6) => ({
-    ...v6,
-    singleMutantHeatmapState: withGradientReseeded(v6.singleMutantHeatmapState),
-    singleMutantHeatmapStates: Object.fromEntries(
-      Object.entries(v6.singleMutantHeatmapStates).map(([key, state]) => [
-        key,
-        withGradientReseeded(state),
-      ]),
-    ),
   }))
   .init(() => ({
     drillDowns: [],

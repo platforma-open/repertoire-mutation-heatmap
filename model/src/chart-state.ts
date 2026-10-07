@@ -117,32 +117,6 @@ export function makeDrillDownChartState(): GraphMakerState {
 }
 
 /**
- * Drops a chart's saved gradient, so the value column's declared palette seeds it afresh.
- *
- * Same mechanism as `withRegionColoursReseeded` above, and the same reason. graph-maker seeds a
- * gradient from the column's `pl7.app/graph/palette` annotation ONCE — `dataBindAes` skips any
- * source that already carries a mapping ("Seed a gradient source from its column, once. A source
- * that already has a mapping is left alone.") — so a chart built before the annotation existed
- * keeps its old scale whatever the column now declares. On the first run with a declared midpoint
- * this was the whole of the bug: the baseline reached the cells and the colours ignored it.
- *
- * Matched on the mapping's own `type: "continuous"` discriminant, NOT on the value column's source
- * id. That id embeds the column's resolve path and the score's index, so it would have to be
- * guessed, and a wrong guess fails silently by matching nothing. A landscape's only continuous
- * mapping is the value gradient: the region and parent-residue tracks are String, so categorical.
- */
-export function withGradientReseeded(state: GraphMakerState): GraphMakerState {
-  const aes = (state as { dataBindAes?: Record<string, unknown> }).dataBindAes;
-  if (aes === undefined) return state;
-  const kept = Object.fromEntries(
-    Object.entries(aes).filter(
-      ([, mapping]) => (mapping as { type?: string } | null)?.type !== "continuous",
-    ),
-  );
-  return { ...state, dataBindAes: kept } as GraphMakerState;
-}
-
-/**
  * Pins "Treat NA value as: empty" on a landscape chart's saved state.
  *
  * The landscape's cell axes are declared dense, so the grid now carries a record for every
