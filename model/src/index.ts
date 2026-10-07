@@ -434,10 +434,16 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   )
 
   // Single-mutant variants of the selected parent in the last run. Undefined until a run with
-  // score columns has finished.
+  // score columns has finished. The field is absent when the run had no score columns, and in
+  // results produced by block versions that did not emit it.
   .output("singleMutantCount", (ctx) => {
-    return ctx.outputs?.resolve("singleMutantCount")?.getDataAsJson<{ singleMutantCount: number }>()
-      ?.singleMutantCount;
+    return ctx.outputs
+      ?.resolve({
+        field: "singleMutantCount",
+        assertFieldType: "Output",
+        allowPermanentAbsence: true,
+      })
+      ?.getDataAsJson<{ singleMutantCount: number }>()?.singleMutantCount;
   })
 
   // --- Drill-down outputs (per-position variant browsing) ---
