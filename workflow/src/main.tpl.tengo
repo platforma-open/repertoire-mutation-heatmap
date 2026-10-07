@@ -89,6 +89,19 @@ wf.prepare(func(args) {
 		name: "pl7.app/repertoire/parentResidue",
 		axes: [{ anchor: "main", idx: 1 }, { anchor: "main", idx: 2 }]
 	}, "parentResidue")
+	// Per-position synonymous baseline from Sort-Seq, [parentId, position] -> enrichment: where a
+	// variant of no effect sits at this position. Same two state-matrix axes as the parent residue,
+	// because Sort-Seq keys it on the profiler's own position axis rather than its internal codon
+	// offset — that is what makes the two join at all.
+	//
+	// addMulti resolves EVERY one: Sort-Seq emits one column per (condition, gate), and which of
+	// them belongs to a given score is decided in the body by matching domains. A run with no
+	// Sort-Seq upstream, or one whose baseline was withheld, resolves to empty and the parent cells
+	// fall back to the WT variant's own score.
+	bb.addMulti({
+		name: "pl7.app/facsBin/baselineLevel",
+		axes: [{ anchor: "main", idx: 1 }, { anchor: "main", idx: 2 }]
+	}, "positionBaseline")
 	// Per-variant mutation count from the profiler, keyed on the state matrix's variantKey axis
 	// (idx 0). Drives the mutation landscape's `mutationCount == 1` predicate. addMulti so a
 	// run that did not emit it resolves to empty and the landscape is simply skipped, rather than
@@ -516,6 +529,10 @@ wf.body(func(args) {
 		// The parent cell at each position carries the WT variant's own score: a variant with
 		// zero mutations holds the parent residue everywhere, so its state-matrix rows are
 		// exactly the parent cells.
+		//
+		// This is the FALLBACK reading of the parent cell. Where Sort-Seq supplied a per-position
+		// synonymous baseline for the score being drawn, that baseline replaces it — see
+		// `baselineFor` below for when, and the per-score loop for why.
 		wtMutants := mutCounts.
 			filter(pt.col("mutCount").eq(pt.lit(0))).
 			select(pt.col("variantKey"))
@@ -523,6 +540,44 @@ wf.body(func(args) {
 			join(wtMutants, { on: "variantKey", how: "inner" }).
 			select(pt.col("variantKey"), pt.col("parentId"), pt.col("position"), pt.col("state"))
 		landscapeCells := pt.concat([mutCells, wtCells])
+
+		// Sort-Seq's per-position baseline, matched to the score being drawn — or undefined,
+		// which is every score that is not one of its per-gate enrichments.
+		//
+		// The baseline is an ENRICHMENT at one (condition, gate), so it shares a scale with
+		// exactly one score column: that same gate's `gateEnrichment`. Dropping it into a mean-bin
+		// map would put a ratio in one cell of a gate-step map. Hence the match on the score's own
+		// domain, and on that one column name.
+		//
+		// `pl7.app/block` is compared too: two Sort-Seq blocks in one project emit columns alike in
+		// everything else, and pairing a score from one with a baseline from the other would draw a
+		// map that looks entirely plausible.
+		SORT_SEQ_ENRICHMENT := "pl7.app/facsBin/gateEnrichment"
+		baselineEntries := columns.getColumns("positionBaseline")
+		baselineFor := func(scoreSpec) {
+			if is_undefined(baselineEntries) || len(baselineEntries) == 0 {
+				return undefined
+			}
+			if is_undefined(scoreSpec) || scoreSpec.name != SORT_SEQ_ENRICHMENT {
+				return undefined
+			}
+			scoreDomain := scoreSpec.domain
+			if is_undefined(scoreDomain) {
+				return undefined
+			}
+			for entry in baselineEntries {
+				if is_undefined(entry.spec) || is_undefined(entry.spec.domain) {
+					continue
+				}
+				baseDomain := entry.spec.domain
+				if baseDomain["pl7.app/facsBin/condition"] == scoreDomain["pl7.app/facsBin/condition"] &&
+					baseDomain["pl7.app/facsBin/gate"] == scoreDomain["pl7.app/facsBin/gate"] &&
+					baseDomain["pl7.app/block"] == scoreDomain["pl7.app/block"] {
+					return entry
+				}
+			}
+			return undefined
+		}
 
 		// --- Drill-down precalc ---
 		// Everything a click needs, computed once for EVERY cell. A click then filters data the
@@ -701,14 +756,23 @@ wf.body(func(args) {
 
 			scoreFile := "singleMutantLandscape_" + string(i) + ".tsv"
 
-			// Guarantee one row per cell. In a true single-mutant library exactly one variant covers
-			// a cell, so `first` IS that variant's value — no aggregation happens. The sort makes the
-			// outcome deterministic in the degenerate case where a library encodes the same
-			// substitution under two variant keys, instead of failing the import on duplicate keys.
-			// No parentId: already scoped to one parent, so the axis would be constant — and
-			// GraphMaker demands every axis be consumed by an input, which put a one-choice
-			// "Show for" selector above the plot.
-			landscapeCells.
+			// Where this score has a matching per-position baseline, that baseline fills the parent
+			// cells and the WT variant's own score is left out of this map.
+			//
+			// The two are rival answers to "what does no effect look like here", and the baseline is
+			// the better one in the library this exists for. A site-saturation library carries the
+			// exact parent nucleotide sequence at a large share of its reads, so its enrichment
+			// saturates and reads as a ceiling rather than as no effect. Its synonymous variants
+			// measure the same thing without that bias — which is the whole reason Sort-Seq computes
+			// the set at all. Where no baseline matched, nothing changes: the WT score stays.
+			baselineEntry := baselineFor(sSpec)
+			parentCellSource := landscapeCells
+			if !is_undefined(baselineEntry) {
+				// Mutant cells only; the baseline supplies every parent cell below.
+				parentCellSource = mutCells
+			}
+
+			cellValues := parentCellSource.
 				join(sDf, { on: "variantKey", how: "inner" }).
 				select(
 					pt.col("position"),
@@ -717,7 +781,48 @@ wf.body(func(args) {
 					// Cast so an integer-valued score still lands in the Double-typed imported
 					// column.
 					pt.col("scoreValue").cast("Double").alias("scoreValue")
-				).
+				)
+
+			if !is_undefined(baselineEntry) {
+				// Header carries the loop index, like the score frame above: every iteration adds
+				// its own frame to the same pt workflow.
+				bHeader := "baselineLevel_" + string(i)
+				baselineDf := ptWf.frame(pt.p.column(bHeader, baselineEntry)).select(
+					pt.axis(PARENT_ID_AXIS).alias("parentId"),
+					pt.axis(POSITION_AXIS).alias("position"),
+					pt.col(bHeader).alias("baselineLevel")
+				)
+				if !is_undefined(args.selectedParentId) {
+					baselineDf = baselineDf.filter(pt.col("parentId").eq(pt.lit(args.selectedParentId)))
+				}
+				// Onto the parent's own residue at each position — the cell the single-mutant data
+				// leaves empty by construction. Inner join, so a position the baseline covers but
+				// the parent-residue track does not simply draws nothing, rather than landing on a
+				// null state.
+				//
+				// A literal variantKey: these rows describe a SET of synonymous variants, not one
+				// variant. It exists to keep the concat's shape and never reaches the file — the
+				// groupBy below drops it.
+				baselineCells := baselineDf.
+					join(parentResDf, { on: "position", how: "inner" }).
+					withColumns(pt.lit("baseline").alias("variantKey")).
+					select(
+						pt.col("position"),
+						pt.col("parentResidue").alias("state"),
+						pt.col("variantKey"),
+						pt.col("baselineLevel").cast("Double").alias("scoreValue")
+					)
+				cellValues = pt.concat([cellValues, baselineCells])
+			}
+
+			// Guarantee one row per cell. In a true single-mutant library exactly one variant covers
+			// a cell, so `first` IS that variant's value — no aggregation happens. The sort makes the
+			// outcome deterministic in the degenerate case where a library encodes the same
+			// substitution under two variant keys, instead of failing the import on duplicate keys.
+			// No parentId: already scoped to one parent, so the axis would be constant — and
+			// GraphMaker demands every axis be consumed by an input, which put a one-choice
+			// "Show for" selector above the plot.
+			cellValues.
 				sort(["position", "state", "variantKey"]).
 				groupBy("position", "state").
 				agg(pt.col("scoreValue").first().alias("cellValue")).
@@ -756,7 +861,10 @@ wf.body(func(args) {
 				label: scoreLabel,
 				ref: ref,
 				file: scoreFile,
-				pairFile: pairFile
+				pairFile: pairFile,
+				// The parent row and the colour scale switch together, on the one condition that
+				// decides what those cells hold.
+				hasBaseline: !is_undefined(baselineEntry)
 			}]
 		}
 	}
@@ -1046,6 +1154,39 @@ wf.body(func(args) {
 	if hasLandscape {
 		lsPf := pframes.pFrameBuilder()
 		for m in scoreMeta {
+			lsAnnotations := {
+				"pl7.app/label": m.label,
+				"pl7.app/isScore": "true",
+				// The UI keys each chart's saved settings on this, so settings
+				// survive a reorder. Annotation, not domain: lineage, not identity.
+				"pl7.app/repertoire/landscapeScoreRef": m.ref,
+				"pl7.app/repertoire/landscapeScoreIndex": string(m.index)
+			}
+			// Log, because an enrichment is multiplicative: half the baseline and twice it sit the
+			// same distance either side. `log` selects d3's `scaleSymlog`, which is defined at
+			// zero, so the cells absent from a gate are covered.
+			//
+			// Sequential: with no midpoint declared, a diverging palette's middle colour would
+			// fall at an arbitrary value and read as "no effect".
+			//
+			// Declared on the column, so graph-maker seeds a chart with it and the user can
+			// change it afterwards.
+			//
+			// Scoped to the scores whose parent row the baseline fills, so the colour scale and
+			// that row switch on one condition.
+			//
+			// The condition is the column's existence, not the selected parent's rows in it: the
+			// column spans every parent and is filtered to one further down. A multi-parent run
+			// whose alignment verified for some parents and not others therefore carries a column
+			// with no row for the selected one, and that chart gets this scale over a blank parent
+			// row. Knowing otherwise would mean awaiting the data here, which costs every
+			// downstream block its specs.
+			if m.hasBaseline {
+				lsAnnotations["pl7.app/graph/palette"] = string(json.encode({
+					name: "viridis",
+					log: true
+				}))
+			}
 			lsCols := xsv.importFile(
 				ptResult.getFile(m.file),
 				"tsv",
@@ -1066,14 +1207,7 @@ wf.body(func(args) {
 								// ref annotation below.
 								"pl7.app/repertoire/landscapeScore": string(m.index)
 							},
-							annotations: {
-								"pl7.app/label": m.label,
-								"pl7.app/isScore": "true",
-								// The UI keys each chart's saved settings on this, so settings
-								// survive a reorder. Annotation, not domain: lineage, not identity.
-								"pl7.app/repertoire/landscapeScoreRef": m.ref,
-								"pl7.app/repertoire/landscapeScoreIndex": string(m.index)
-							}
+							annotations: lsAnnotations
 						}
 					}],
 					storageFormat: "Parquet",

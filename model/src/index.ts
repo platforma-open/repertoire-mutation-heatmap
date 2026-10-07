@@ -99,6 +99,35 @@ export function landscapePanelsFrom(
   return panels;
 }
 
+/**
+ * Whether a discovered column can be plotted as a landscape score.
+ *
+ * A cell is ONE variant's value, so the column must be numeric and keyed on the variant axis and
+ * nothing else. Numeric alone — all this used to check — admitted two kinds that cannot be drawn:
+ *
+ *  - Keyed on the anchor's OTHER axes. Sort-Seq's baselines sit on `[parentId]` and
+ *    `[parentId, position]`, both reachable from the state matrix, so they were offered as scores.
+ *    The workflow reads `pt.axis(variantKey)` off whatever it is given, which those do not have.
+ *  - Keyed on the variant axis PLUS another, such as `[variantKey, gate]`. Those do join, but give
+ *    several rows per variant, and the landscape's one-row-per-cell `first` would then pick one of
+ *    them with nothing reporting it — the worst of the three outcomes.
+ *
+ * Deliberately NOT filtered on `pl7.app/isScore`, though Sort-Seq sets it and an earlier comment
+ * in the picker expected to use it once that block landed. It would also drop variant-keyed
+ * columns a user may legitimately plot — an abundance, a mutation count — which carry no such
+ * annotation. The axis shape is a hard requirement of the plot; the annotation is a statement of
+ * intent, and the two should not be confused.
+ */
+export function isLandscapeScoreColumn(
+  spec: PColumnSpec,
+  variantAxisName: string | undefined,
+): boolean {
+  const numeric = new Set(["Int", "Long", "Float", "Double"]);
+  if (!numeric.has(spec.valueType as string)) return false;
+  if (variantAxisName === undefined) return false;
+  return spec.axesSpec.length === 1 && spec.axesSpec[0].name === variantAxisName;
+}
+
 /** The section href of one landscape page. */
 export function landscapeHref(scoreKey: string): `/?score=${string}` {
   return `/?score=${encodeURIComponent(scoreKey)}`;
@@ -301,12 +330,14 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
       })
       .getColumns();
 
-    const numeric = new Set(["Int", "Long", "Float", "Double"]);
+    // The anchor's own axis 0 rather than a literal, so the check stays on the axis this dataset
+    // is actually keyed on.
+    const variantAxisName = stateSpec.axesSpec[0]?.name;
     const seen = new Set<string>();
     const options: { label: string; value: SUniversalPColumnId }[] = [];
     for (const recipe of columns) {
       const spec = recipe.getSpec();
-      if (!numeric.has(spec.valueType as string)) continue;
+      if (!isLandscapeScoreColumn(spec, variantAxisName)) continue;
       // Dedup reachability variants of one column (by identity, not anchored id).
       const dedupKey = spec.name + "|" + JSON.stringify(spec.domain ?? {});
       if (seen.has(dedupKey)) continue;

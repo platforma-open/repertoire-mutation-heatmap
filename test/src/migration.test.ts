@@ -1,4 +1,5 @@
 import {
+  isLandscapeScoreColumn,
   drillDownHref,
   drillDownLabel,
   landscapeHref,
@@ -251,5 +252,45 @@ describe("withRegionColoursReseeded", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const state = { title: "x" } as any;
     expect(withRegionColoursReseeded(state)).toBe(state);
+  });
+});
+
+describe("isLandscapeScoreColumn", () => {
+  const VARIANT = "pl7.app/variantKey";
+  const col = (valueType: string, axes: string[]) =>
+    ({
+      valueType,
+      axesSpec: axes.map((name) => ({ name, type: "String" })),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    }) as any;
+
+  test("takes a numeric column keyed on the variant axis alone", () => {
+    expect(isLandscapeScoreColumn(col("Double", [VARIANT]), VARIANT)).toBe(true);
+    expect(isLandscapeScoreColumn(col("Int", [VARIANT]), VARIANT)).toBe(true);
+  });
+
+  test("refuses Sort-Seq's baselines, which are keyed on the anchor's other axes", () => {
+    const parentId = "pl7.app/repertoire/parentId";
+    const position = "pl7.app/repertoire/position";
+    // The per-gate baseline and the per-position one. Both numeric, both reachable from the
+    // state matrix, neither carrying a variant key for the workflow to read.
+    expect(isLandscapeScoreColumn(col("Double", [parentId]), VARIANT)).toBe(false);
+    expect(isLandscapeScoreColumn(col("Double", [parentId, position]), VARIANT)).toBe(false);
+  });
+
+  test("refuses a column carrying the variant axis plus another", () => {
+    // `[variantKey, gate]` joins but yields several rows per variant, which the landscape's
+    // `first` would silently collapse.
+    expect(isLandscapeScoreColumn(col("Double", [VARIANT, "pl7.app/facsBin/gate"]), VARIANT)).toBe(
+      false,
+    );
+  });
+
+  test("refuses a non-numeric column on the right axis", () => {
+    expect(isLandscapeScoreColumn(col("String", [VARIANT]), VARIANT)).toBe(false);
+  });
+
+  test("refuses everything when the anchor has no axis to name", () => {
+    expect(isLandscapeScoreColumn(col("Double", [VARIANT]), undefined)).toBe(false);
   });
 });
