@@ -440,7 +440,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     return ctx.outputs
       ?.resolve({
         field: "singleMutantCount",
-        assertFieldType: "Output",
+        assertFieldType: "Input",
         allowPermanentAbsence: true,
       })
       ?.getDataAsJson<{ singleMutantCount: number }>()?.singleMutantCount;
