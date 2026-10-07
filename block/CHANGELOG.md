@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.block
 
+## 1.2.1
+
+### Patch Changes
+
+- 7665da0: Fix "Service or input field not found singleMutantCount" after upgrading the block: treat the output as absent when the results do not contain it
+
 ## 1.2.0
 
 ### Minor Changes

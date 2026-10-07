@@ -1,6 +1,6 @@
 {
   "name": "@platforma-open/milaboratories.repertoire-mutation-heatmap.block",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "files": [
     "dist",
     "block-pack"
