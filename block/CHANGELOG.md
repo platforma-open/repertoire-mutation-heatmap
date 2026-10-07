@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.block
 
+## 1.2.2
+
+### Patch Changes
+
+- c347fd6: Fix "Unexpected field type: expected Output but got Input" for singleMutantCount: workflow results are Input fields
+
 ## 1.2.1
 
 ### Patch Changes

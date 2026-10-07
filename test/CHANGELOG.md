@@ -1,5 +1,12 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.test
 
+## 1.0.8
+
+### Patch Changes
+
+- Updated dependencies [c347fd6]
+  - @platforma-open/milaboratories.repertoire-mutation-heatmap.model@1.2.2
+
 ## 1.0.7
 
 ### Patch Changes
