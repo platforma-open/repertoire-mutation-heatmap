@@ -134,6 +134,10 @@ wf.prepare(func(args) {
 			bb.addSingle(ref)
 		}
 	}
+	// Optional subset column picked alongside the state matrix (PlDatasetSelector)
+	if !is_undefined(args.inputFilter) {
+		bb.addRef(json.decode(args.inputFilter))
+	}
 	return {
 		columns: bb.build()
 	}
@@ -303,7 +307,18 @@ wf.body(func(args) {
 	// Axes come back named by their spec, not by a header a builder assigns, so each
 	// is aliased here to the name the rest of this body already uses. Matching on the
 	// axis NAME keeps the resolution identical to the setAxisHeader calls it replaces.
-	smDf := ptWf.frame(pt.p.column("state", stateCol)).select(
+	// Optional subset: only its variants enter the maps (inner join on the variant axis), and the
+	// trace roots in it. Every view derives from smDf, so this one join restricts them all.
+	filterColumn := undefined
+	traceSpec := stateSpec
+	smInput := pt.p.column("state", stateCol)
+	if !is_undefined(args.inputFilter) {
+		f := columns.getColumn(json.decode(args.inputFilter))
+		filterColumn = { spec: f.spec, data: f.data }
+		traceSpec = f.spec
+		smInput = pt.p.inner(smInput, pt.p.column("subsetFilter", filterColumn))
+	}
+	smDf := ptWf.frame(smInput).select(
 		pt.axis(VARIANT_KEY_AXIS).alias("variantKey"),
 		pt.axis(PARENT_ID_AXIS).alias("parentId"),
 		pt.axis(POSITION_AXIS).alias("position"),
@@ -976,7 +991,7 @@ wf.body(func(args) {
 
 	ptResult := ptWf.run()
 
-	trace := pSpec.makeTrace(stateSpec, {
+	trace := pSpec.makeTrace(traceSpec, {
 		type: "milaboratories.repertoire-mutation-heatmap",
 		importance: 50,
 		label: "Mutation Explorer"
