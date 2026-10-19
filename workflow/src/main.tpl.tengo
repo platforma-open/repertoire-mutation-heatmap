@@ -745,9 +745,12 @@ wf.body(func(args) {
 
 		// [mutationId, position, state] -> 1 on the fixed cell only, so GraphMaker's Highlight
 		// input outlines it as a subset — the same mechanism as the parent-residue mark above.
+		// One row per cell: several single mutants can carry one substitution (e.g. one per parent).
 		singleMutCells.
-			select(pt.col("mutationId"), pt.col("position"), pt.col("state")).
+			groupBy("mutationId", "position", "state").
+			agg(pt.col("variantKey").count().alias("singleMutants")).
 			withColumns(pt.lit(1).alias("isFixedMutation")).
+			select(pt.col("mutationId"), pt.col("position"), pt.col("state"), pt.col("isFixedMutation")).
 			save("drillDownFixedFlag.tsv")
 
 		// One saved frame per score, NOT one stacked column under a shared `score` axis. A heatmap
