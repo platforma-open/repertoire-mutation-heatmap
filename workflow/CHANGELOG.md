@@ -1,5 +1,11 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.workflow
 
+## 1.2.1
+
+### Patch Changes
+
+- 9b15f02: Release every package through npm trusted publishing (OIDC) so each package's trusted publisher is used before it expires.
+
 ## 1.2.0
 
 ### Minor Changes

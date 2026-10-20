@@ -1,5 +1,13 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.ui
 
+## 1.1.13
+
+### Patch Changes
+
+- 9b15f02: Release every package through npm trusted publishing (OIDC) so each package's trusted publisher is used before it expires.
+- Updated dependencies [9b15f02]
+  - @platforma-open/milaboratories.repertoire-mutation-heatmap.model@1.2.3
+
 ## 1.1.12
 
 ### Patch Changes
