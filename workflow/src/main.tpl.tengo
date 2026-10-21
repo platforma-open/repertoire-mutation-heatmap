@@ -134,6 +134,10 @@ wf.prepare(func(args) {
 			bb.addSingle(ref)
 		}
 	}
+	// Optional subset column picked alongside the state matrix (PlDatasetSelector)
+	if !is_undefined(args.inputFilter) {
+		bb.addRef(json.decode(args.inputFilter))
+	}
 	return {
 		columns: bb.build()
 	}
@@ -303,20 +307,34 @@ wf.body(func(args) {
 	// Axes come back named by their spec, not by a header a builder assigns, so each
 	// is aliased here to the name the rest of this body already uses. Matching on the
 	// axis NAME keeps the resolution identical to the setAxisHeader calls it replaces.
-	smDf := ptWf.frame(pt.p.column("state", stateCol)).select(
-		pt.axis(VARIANT_KEY_AXIS).alias("variantKey"),
-		pt.axis(PARENT_ID_AXIS).alias("parentId"),
-		pt.axis(POSITION_AXIS).alias("position"),
-		pt.col("state")
-	)
-
+	// Optional subset: only its variants enter the maps (inner join on the variant axis), and the
+	// trace roots in it. Every view derives from smDf, so this one join restricts them all.
+	filterColumn := undefined
+	traceSpec := stateSpec
+	smInput := pt.p.column("state", stateCol)
+	if !is_undefined(args.inputFilter) {
+		f := columns.getColumn(json.decode(args.inputFilter))
+		filterColumn = { spec: f.spec, data: f.data }
+		traceSpec = f.spec
+		smInput = pt.p.inner(smInput, pt.p.column("subsetFilter", filterColumn))
+	}
 	// Scope the whole plot to one parent. Everything downstream derives from smDf (heat map
 	// cells, the parent-residue track, composition), so a single filter here makes them all
 	// single-parent — which is what the position-keyed annotation tracks require. The region
 	// track has its own source (bundle column) and is filtered separately below.
-	if !is_undefined(args.selectedParentId) {
-		smDf = smDf.filter(pt.col("parentId").eq(pt.lit(args.selectedParentId)))
+	stateFrame := func(input) {
+		df := ptWf.frame(input).select(
+			pt.axis(VARIANT_KEY_AXIS).alias("variantKey"),
+			pt.axis(PARENT_ID_AXIS).alias("parentId"),
+			pt.axis(POSITION_AXIS).alias("position"),
+			pt.col("state")
+		)
+		if !is_undefined(args.selectedParentId) {
+			df = df.filter(pt.col("parentId").eq(pt.lit(args.selectedParentId)))
+		}
+		return df
 	}
+	smDf := stateFrame(smInput)
 
 	// --- Region track (optional) ---
 	// Collapse the profiler's per-position region membership [parentId, position] -> region to
@@ -378,8 +396,10 @@ wf.body(func(args) {
 			groupBy("position").
 			agg(pt.col("parentResidue").cast("String").first().alias("parentResidue"))
 	} else {
-		// smDf is already scoped to the selected parent, so this collapse is parent-local.
-		parentResDf = smDf.
+		// Guessed from all variants, not just the subset's: a subset of A5C mutants would make C the parent.
+		// Scoped to the selected parent like smDf, so this collapse is parent-local.
+		allStatesDf := is_undefined(filterColumn) ? smDf : stateFrame(pt.p.column("state", stateCol))
+		parentResDf = allStatesDf.
 			groupBy("position", "state").
 			agg(pt.col("variantKey").count().alias("n")).
 			withColumns(pt.col("n").max().over(["position"]).alias("maxN")).
@@ -730,9 +750,12 @@ wf.body(func(args) {
 
 		// [mutationId, position, state] -> 1 on the fixed cell only, so GraphMaker's Highlight
 		// input outlines it as a subset — the same mechanism as the parent-residue mark above.
+		// One row per cell: several single mutants can carry one substitution (e.g. one per parent).
 		singleMutCells.
-			select(pt.col("mutationId"), pt.col("position"), pt.col("state")).
+			groupBy("mutationId", "position", "state").
+			agg(pt.col("variantKey").count().alias("singleMutants")).
 			withColumns(pt.lit(1).alias("isFixedMutation")).
+			select(pt.col("mutationId"), pt.col("position"), pt.col("state"), pt.col("isFixedMutation")).
 			save("drillDownFixedFlag.tsv")
 
 		// One saved frame per score, NOT one stacked column under a shared `score` axis. A heatmap
@@ -976,7 +999,7 @@ wf.body(func(args) {
 
 	ptResult := ptWf.run()
 
-	trace := pSpec.makeTrace(stateSpec, {
+	trace := pSpec.makeTrace(traceSpec, {
 		type: "milaboratories.repertoire-mutation-heatmap",
 		importance: 50,
 		label: "Mutation Explorer"

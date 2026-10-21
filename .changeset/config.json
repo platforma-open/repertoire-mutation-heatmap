@@ -2,7 +2,14 @@
   "$schema": "https://unpkg.com/@changesets/config@3.0.2/schema.json",
   "changelog": "@changesets/cli/changelog",
   "commit": false,
-  "fixed": [],
+  "fixed": [
+    [
+      "@platforma-open/milaboratories.repertoire-mutation-heatmap.block",
+      "@platforma-open/milaboratories.repertoire-mutation-heatmap.model",
+      "@platforma-open/milaboratories.repertoire-mutation-heatmap.ui",
+      "@platforma-open/milaboratories.repertoire-mutation-heatmap.workflow"
+    ]
+  ],
   "linked": [],
   "access": "restricted",
   "baseBranch": "main",

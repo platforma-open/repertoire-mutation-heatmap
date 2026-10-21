@@ -1,4 +1,5 @@
 import type {
+  DatasetOption,
   InferOutputsType,
   PColumnSpec,
   PFrameHandle,
@@ -22,6 +23,7 @@ import {
   LANDSCAPE_SCORE_REF,
   LANDSCAPE_VALUE,
   STATE_MATRIX,
+  VARIANT_KEY_AXIS,
 } from "./specs";
 import type {
   BlockArgs,
@@ -48,10 +50,13 @@ export {
 export type * from "@milaboratories/helpers";
 import {
   BlockModelV3,
+  buildDatasetOptions,
   ColumnsCollection,
+  createGlobalPObjectId,
   createPlDataTableStateV2,
   DataModelBuilder,
   createPFrameForGraphs,
+  isPColumnSpec,
 } from "@platforma-sdk/model";
 
 /**
@@ -260,6 +265,9 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     }
     return {
       stateMatrixRef: data.stateMatrixRef,
+      ...(data.filterRef !== undefined && {
+        inputFilter: createGlobalPObjectId(data.filterRef.blockId, data.filterRef.name),
+      }),
       selectedParentId: data.selectedParentId,
       // Order is meaningful (baseline first) — pass through verbatim, do not sort.
       roundFrequencyRefs: data.roundFrequencyRefs ?? [],
@@ -286,19 +294,28 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   // aa and nt state matrices share the name + dataset label, distinguished only by the
   // pl7.app/alphabet domain — so when one dataset exposes both, append a compact (aa)/(nt)
   // suffix to keep the options unique; otherwise leave the plain dataset name.
-  .output("stateMatrixOptions", (ctx) => {
-    const options = ctx.resultPool.getOptions([{ name: STATE_MATRIX }], {
-      label: { includeNativeLabel: false },
-    });
+  // Each state matrix carries its variant subsets (e.g. Lead Selection picks) as filters.
+  .output("stateMatrixOptions", (ctx): DatasetOption[] => {
+    const options =
+      buildDatasetOptions(ctx, {
+        primary: (spec) => isPColumnSpec(spec) && spec.name === STATE_MATRIX,
+        // Only subsets keyed by the variant axis alone: a parent subset is the Parent picker's job.
+        filter: (spec) =>
+          isPColumnSpec(spec) &&
+          spec.axesSpec.length === 1 &&
+          spec.axesSpec[0].name === VARIANT_KEY_AXIS,
+        requireEnrichments: false,
+      }) ?? [];
     const labelCounts = new Map<string, number>();
-    for (const o of options) labelCounts.set(o.label, (labelCounts.get(o.label) ?? 0) + 1);
+    for (const { primary } of options)
+      labelCounts.set(primary.label, (labelCounts.get(primary.label) ?? 0) + 1);
     return options.map((o) => {
-      if ((labelCounts.get(o.label) ?? 0) <= 1) return o;
+      if ((labelCounts.get(o.primary.label) ?? 0) <= 1) return o;
       const alphabet = ctx.resultPool
-        .getPColumnSpecByRef(o.ref)
+        .getPColumnSpecByRef(o.primary.ref)
         ?.axesSpec.find((a) => a.domain?.["pl7.app/alphabet"])?.domain?.["pl7.app/alphabet"];
       const suffix = alphabet === "aminoacid" ? " (aa)" : alphabet === "nucleotide" ? " (nt)" : "";
-      return { ...o, label: o.label + suffix };
+      return { ...o, primary: { ...o.primary, label: o.primary.label + suffix } };
     });
   })
 
