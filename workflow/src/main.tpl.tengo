@@ -318,20 +318,23 @@ wf.body(func(args) {
 		traceSpec = f.spec
 		smInput = pt.p.inner(smInput, pt.p.column("subsetFilter", filterColumn))
 	}
-	smDf := ptWf.frame(smInput).select(
-		pt.axis(VARIANT_KEY_AXIS).alias("variantKey"),
-		pt.axis(PARENT_ID_AXIS).alias("parentId"),
-		pt.axis(POSITION_AXIS).alias("position"),
-		pt.col("state")
-	)
-
 	// Scope the whole plot to one parent. Everything downstream derives from smDf (heat map
 	// cells, the parent-residue track, composition), so a single filter here makes them all
 	// single-parent — which is what the position-keyed annotation tracks require. The region
 	// track has its own source (bundle column) and is filtered separately below.
-	if !is_undefined(args.selectedParentId) {
-		smDf = smDf.filter(pt.col("parentId").eq(pt.lit(args.selectedParentId)))
+	stateFrame := func(input) {
+		df := ptWf.frame(input).select(
+			pt.axis(VARIANT_KEY_AXIS).alias("variantKey"),
+			pt.axis(PARENT_ID_AXIS).alias("parentId"),
+			pt.axis(POSITION_AXIS).alias("position"),
+			pt.col("state")
+		)
+		if !is_undefined(args.selectedParentId) {
+			df = df.filter(pt.col("parentId").eq(pt.lit(args.selectedParentId)))
+		}
+		return df
 	}
+	smDf := stateFrame(smInput)
 
 	// --- Region track (optional) ---
 	// Collapse the profiler's per-position region membership [parentId, position] -> region to
@@ -393,8 +396,10 @@ wf.body(func(args) {
 			groupBy("position").
 			agg(pt.col("parentResidue").cast("String").first().alias("parentResidue"))
 	} else {
-		// smDf is already scoped to the selected parent, so this collapse is parent-local.
-		parentResDf = smDf.
+		// Guessed from all variants, not just the subset's: a subset of A5C mutants would make C the parent.
+		// Scoped to the selected parent like smDf, so this collapse is parent-local.
+		allStatesDf := is_undefined(filterColumn) ? smDf : stateFrame(pt.p.column("state", stateCol))
+		parentResDf = allStatesDf.
 			groupBy("position", "state").
 			agg(pt.col("variantKey").count().alias("n")).
 			withColumns(pt.col("n").max().over(["position"]).alias("maxN")).
