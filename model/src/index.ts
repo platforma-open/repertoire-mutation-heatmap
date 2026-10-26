@@ -22,6 +22,7 @@ import {
   LANDSCAPE_SCORE_INDEX,
   LANDSCAPE_SCORE_REF,
   LANDSCAPE_VALUE,
+  PARENT_LINK,
   STATE_MATRIX,
   VARIANT_KEY_AXIS,
 } from "./specs";
@@ -38,6 +39,7 @@ import type {
 
 // The model's public surface is the package root; the files are an internal split.
 export type * from "./types";
+export { PARENT_ID_AXIS } from "./specs";
 export {
   makeDrillDownChartState,
   makeLandscapeChartState,
@@ -56,6 +58,7 @@ import {
   createPlDataTableStateV2,
   DataModelBuilder,
   createPFrameForGraphs,
+  deriveDistinctLabels,
   isPColumnSpec,
 } from "@platforma-sdk/model";
 
@@ -131,6 +134,36 @@ export function isLandscapeScoreColumn(
   if (!numeric.has(spec.valueType as string)) return false;
   if (variantAxisName === undefined) return false;
   return spec.axesSpec.length === 1 && spec.axesSpec[0].name === variantAxisName;
+}
+
+/** The subset a column was computed on (Clonotype Enrichment's stamp), if any. */
+export function subsetStampOf(spec: PColumnSpec): string | undefined {
+  return spec.domain?.["pl7.app/inputSubset"];
+}
+
+/**
+ * Picker entries for score and round columns. Only columns that fit the run: full-data ones, or
+ * ones computed on the run's own subset. Labels come from the trace, so a subset's copy is named.
+ */
+function runColumnOptions(
+  entries: { id: string; spec: PColumnSpec }[],
+  inputFilter: string | undefined,
+): { label: string; value: SUniversalPColumnId; subset?: string }[] {
+  const fitting = entries.filter((e) => {
+    const stamp = subsetStampOf(e.spec);
+    return stamp === undefined || stamp === inputFilter;
+  });
+  const labels = deriveDistinctLabels(fitting.map((e) => e.spec));
+  return fitting.map((e, i) => ({
+    label: labels[i] ?? e.id,
+    value: e.id as SUniversalPColumnId,
+    ...(subsetStampOf(e.spec) !== undefined && { subset: subsetStampOf(e.spec) }),
+  }));
+}
+
+/** The run's subset as the workflow and the stamp write it. */
+function inputFilterOf(data: BlockData): string | undefined {
+  return data.filterRef && createGlobalPObjectId(data.filterRef.blockId, data.filterRef.name);
 }
 
 /** The section href of one landscape page. */
@@ -351,7 +384,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     // is actually keyed on.
     const variantAxisName = stateSpec.axesSpec[0]?.name;
     const seen = new Set<string>();
-    const options: { label: string; value: SUniversalPColumnId }[] = [];
+    const entries: { id: string; spec: PColumnSpec }[] = [];
     for (const recipe of columns) {
       const spec = recipe.getSpec();
       if (!isLandscapeScoreColumn(spec, variantAxisName)) continue;
@@ -359,12 +392,9 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
       const dedupKey = spec.name + "|" + JSON.stringify(spec.domain ?? {});
       if (seen.has(dedupKey)) continue;
       seen.add(dedupKey);
-      options.push({
-        label: (spec.annotations?.["pl7.app/label"] as string | undefined) ?? recipe.id,
-        value: recipe.id as SUniversalPColumnId,
-      });
+      entries.push({ id: recipe.id, spec });
     }
-    return options;
+    return runColumnOptions(entries, inputFilterOf(ctx.data));
   })
 
   // Per-round frequency columns from the enrichment block (composition-enrichment view).
@@ -401,13 +431,37 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
         .getColumns(),
     );
 
-    return matches.map((recipe) => {
-      const spec = recipe.getSpec();
-      return {
-        label: (spec.annotations?.["pl7.app/label"] as string | undefined) ?? recipe.id,
-        value: recipe.id as SUniversalPColumnId,
-      };
-    });
+    return runColumnOptions(
+      matches.map((recipe) => ({ id: recipe.id, spec: recipe.getSpec() })),
+      inputFilterOf(ctx.data),
+    );
+  })
+
+  // The variant -> parent linker and the subset column in one frame, so the UI can offer only
+  // parents the subset reaches. Undefined without a subset or when the dataset has no linker.
+  .output("subsetParentsFrame", (ctx) => {
+    const { stateMatrixRef, filterRef } = ctx.data;
+    if (stateMatrixRef === undefined || filterRef === undefined) return undefined;
+    const variantAxis = poolSpecByRef(ctx, stateMatrixRef)?.axesSpec[0];
+    const filter = ctx.resultPool.getPColumnByRef(filterRef);
+    if (variantAxis === undefined || filter === undefined) return undefined;
+    const linker = ctx.resultPool
+      .selectColumns(
+        (spec) =>
+          spec.name === PARENT_LINK &&
+          spec.axesSpec.some(
+            (a) =>
+              a.name === variantAxis.name &&
+              Object.entries(variantAxis.domain ?? {}).every(([k, v]) => a.domain?.[k] === v),
+          ),
+      )
+      .find((c) => c.data !== undefined);
+    if (linker?.data === undefined) return undefined;
+    return {
+      frame: ctx.createPFrame([{ ...linker, data: linker.data }, filter]),
+      linkerId: linker.id,
+      filterId: filter.id,
+    };
   })
 
   // State-matrix column as a pframe + its id — available straight from the result pool, before

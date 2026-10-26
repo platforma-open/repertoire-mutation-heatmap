@@ -26,6 +26,7 @@ pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
 pt := import("@platforma-sdk/workflow-tengo:pt")
 maps := import("@platforma-sdk/workflow-tengo:maps")
 canonical := import("@platforma-sdk/workflow-tengo:canonical")
+ll := import("@platforma-sdk/workflow-tengo:ll")
 json := import("json")
 units := import("@platforma-sdk/workflow-tengo:units")
 pConstants := import("@platforma-sdk/workflow-tengo:pframes.constants")
@@ -201,6 +202,20 @@ wf.body(func(args) {
 	columns := args.columns
 	stateSpec := columns.getSpec(args.stateMatrixRef)
 	stateCol := columns.getColumn(args.stateMatrixRef)
+
+	// A pick computed on another subset would pass its values off as this run's. The pickers hide
+	// these; this catches a stale pick. Rounds join the bundle only from two on.
+	pickedRefs := is_undefined(args.scoreRefs) ? [] : copy(args.scoreRefs)
+	if !is_undefined(args.roundFrequencyRefs) && len(args.roundFrequencyRefs) >= 2 {
+		pickedRefs = append(pickedRefs, args.roundFrequencyRefs...)
+	}
+	for ref in pickedRefs {
+		domain := columns.getSpec(ref).domain
+		stamp := is_undefined(domain) ? undefined : domain["pl7.app/inputSubset"]
+		if !is_undefined(stamp) && stamp != args.inputFilter {
+			ll.panic("A picked score or round frequency was computed on a different subset. Pick it again in Settings.")
+		}
+	}
 
 	// State-matrix axes, in emitted order [variantKey, parentId, position].
 	parentAxisSpec := stateSpec.axesSpec[1]
