@@ -1,4 +1,5 @@
 import type {
+  DatasetOption,
   InferOutputsType,
   PColumnSpec,
   PFrameHandle,
@@ -21,7 +22,9 @@ import {
   LANDSCAPE_SCORE_INDEX,
   LANDSCAPE_SCORE_REF,
   LANDSCAPE_VALUE,
+  PARENT_LINK,
   STATE_MATRIX,
+  VARIANT_KEY_AXIS,
 } from "./specs";
 import type {
   BlockArgs,
@@ -36,6 +39,7 @@ import type {
 
 // The model's public surface is the package root; the files are an internal split.
 export type * from "./types";
+export { PARENT_ID_AXIS } from "./specs";
 export {
   makeDrillDownChartState,
   makeLandscapeChartState,
@@ -48,10 +52,14 @@ export {
 export type * from "@milaboratories/helpers";
 import {
   BlockModelV3,
+  buildDatasetOptions,
   ColumnsCollection,
+  createGlobalPObjectId,
   createPlDataTableStateV2,
   DataModelBuilder,
   createPFrameForGraphs,
+  deriveDistinctLabels,
+  isPColumnSpec,
 } from "@platforma-sdk/model";
 
 /**
@@ -126,6 +134,36 @@ export function isLandscapeScoreColumn(
   if (!numeric.has(spec.valueType as string)) return false;
   if (variantAxisName === undefined) return false;
   return spec.axesSpec.length === 1 && spec.axesSpec[0].name === variantAxisName;
+}
+
+/** The subset a column was computed on (Clonotype Enrichment's stamp), if any. */
+export function subsetStampOf(spec: PColumnSpec): string | undefined {
+  return spec.domain?.["pl7.app/inputSubset"];
+}
+
+/**
+ * Picker entries for score and round columns. Only columns that fit the run: full-data ones, or
+ * ones computed on the run's own subset. Labels come from the trace, so a subset's copy is named.
+ */
+function runColumnOptions(
+  entries: { id: string; spec: PColumnSpec }[],
+  inputFilter: string | undefined,
+): { label: string; value: SUniversalPColumnId; subset?: string }[] {
+  const fitting = entries.filter((e) => {
+    const stamp = subsetStampOf(e.spec);
+    return stamp === undefined || stamp === inputFilter;
+  });
+  const labels = deriveDistinctLabels(fitting.map((e) => e.spec));
+  return fitting.map((e, i) => ({
+    label: labels[i] ?? e.id,
+    value: e.id as SUniversalPColumnId,
+    ...(subsetStampOf(e.spec) !== undefined && { subset: subsetStampOf(e.spec) }),
+  }));
+}
+
+/** The run's subset as the workflow and the stamp write it. */
+function inputFilterOf(data: BlockData): string | undefined {
+  return data.filterRef && createGlobalPObjectId(data.filterRef.blockId, data.filterRef.name);
 }
 
 /** The section href of one landscape page. */
@@ -260,6 +298,9 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     }
     return {
       stateMatrixRef: data.stateMatrixRef,
+      ...(data.filterRef !== undefined && {
+        inputFilter: createGlobalPObjectId(data.filterRef.blockId, data.filterRef.name),
+      }),
       selectedParentId: data.selectedParentId,
       // Order is meaningful (baseline first) — pass through verbatim, do not sort.
       roundFrequencyRefs: data.roundFrequencyRefs ?? [],
@@ -286,19 +327,28 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   // aa and nt state matrices share the name + dataset label, distinguished only by the
   // pl7.app/alphabet domain — so when one dataset exposes both, append a compact (aa)/(nt)
   // suffix to keep the options unique; otherwise leave the plain dataset name.
-  .output("stateMatrixOptions", (ctx) => {
-    const options = ctx.resultPool.getOptions([{ name: STATE_MATRIX }], {
-      label: { includeNativeLabel: false },
-    });
+  // Each state matrix carries its variant subsets (e.g. Lead Selection picks) as filters.
+  .output("stateMatrixOptions", (ctx): DatasetOption[] => {
+    const options =
+      buildDatasetOptions(ctx, {
+        primary: (spec) => isPColumnSpec(spec) && spec.name === STATE_MATRIX,
+        // Only subsets keyed by the variant axis alone: a parent subset is the Parent picker's job.
+        filter: (spec) =>
+          isPColumnSpec(spec) &&
+          spec.axesSpec.length === 1 &&
+          spec.axesSpec[0].name === VARIANT_KEY_AXIS,
+        requireEnrichments: false,
+      }) ?? [];
     const labelCounts = new Map<string, number>();
-    for (const o of options) labelCounts.set(o.label, (labelCounts.get(o.label) ?? 0) + 1);
+    for (const { primary } of options)
+      labelCounts.set(primary.label, (labelCounts.get(primary.label) ?? 0) + 1);
     return options.map((o) => {
-      if ((labelCounts.get(o.label) ?? 0) <= 1) return o;
+      if ((labelCounts.get(o.primary.label) ?? 0) <= 1) return o;
       const alphabet = ctx.resultPool
-        .getPColumnSpecByRef(o.ref)
+        .getPColumnSpecByRef(o.primary.ref)
         ?.axesSpec.find((a) => a.domain?.["pl7.app/alphabet"])?.domain?.["pl7.app/alphabet"];
       const suffix = alphabet === "aminoacid" ? " (aa)" : alphabet === "nucleotide" ? " (nt)" : "";
-      return { ...o, label: o.label + suffix };
+      return { ...o, primary: { ...o.primary, label: o.primary.label + suffix } };
     });
   })
 
@@ -334,7 +384,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     // is actually keyed on.
     const variantAxisName = stateSpec.axesSpec[0]?.name;
     const seen = new Set<string>();
-    const options: { label: string; value: SUniversalPColumnId }[] = [];
+    const entries: { id: string; spec: PColumnSpec }[] = [];
     for (const recipe of columns) {
       const spec = recipe.getSpec();
       if (!isLandscapeScoreColumn(spec, variantAxisName)) continue;
@@ -342,12 +392,9 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
       const dedupKey = spec.name + "|" + JSON.stringify(spec.domain ?? {});
       if (seen.has(dedupKey)) continue;
       seen.add(dedupKey);
-      options.push({
-        label: (spec.annotations?.["pl7.app/label"] as string | undefined) ?? recipe.id,
-        value: recipe.id as SUniversalPColumnId,
-      });
+      entries.push({ id: recipe.id, spec });
     }
-    return options;
+    return runColumnOptions(entries, inputFilterOf(ctx.data));
   })
 
   // Per-round frequency columns from the enrichment block (composition-enrichment view).
@@ -384,13 +431,37 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
         .getColumns(),
     );
 
-    return matches.map((recipe) => {
-      const spec = recipe.getSpec();
-      return {
-        label: (spec.annotations?.["pl7.app/label"] as string | undefined) ?? recipe.id,
-        value: recipe.id as SUniversalPColumnId,
-      };
-    });
+    return runColumnOptions(
+      matches.map((recipe) => ({ id: recipe.id, spec: recipe.getSpec() })),
+      inputFilterOf(ctx.data),
+    );
+  })
+
+  // The variant -> parent linker and the subset column in one frame, so the UI can offer only
+  // parents the subset reaches. Undefined without a subset or when the dataset has no linker.
+  .output("subsetParentsFrame", (ctx) => {
+    const { stateMatrixRef, filterRef } = ctx.data;
+    if (stateMatrixRef === undefined || filterRef === undefined) return undefined;
+    const variantAxis = poolSpecByRef(ctx, stateMatrixRef)?.axesSpec[0];
+    const filter = ctx.resultPool.getPColumnByRef(filterRef);
+    if (variantAxis === undefined || filter === undefined) return undefined;
+    const linker = ctx.resultPool
+      .selectColumns(
+        (spec) =>
+          spec.name === PARENT_LINK &&
+          spec.axesSpec.some(
+            (a) =>
+              a.name === variantAxis.name &&
+              Object.entries(variantAxis.domain ?? {}).every(([k, v]) => a.domain?.[k] === v),
+          ),
+      )
+      .find((c) => c.data !== undefined);
+    if (linker?.data === undefined) return undefined;
+    return {
+      frame: ctx.createPFrame([{ ...linker, data: linker.data }, filter]),
+      linkerId: linker.id,
+      filterId: filter.id,
+    };
   })
 
   // State-matrix column as a pframe + its id — available straight from the result pool, before

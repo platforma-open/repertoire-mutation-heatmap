@@ -1,11 +1,23 @@
 <script setup lang="ts">
-import type { PObjectId, SUniversalPColumnId } from "@platforma-sdk/model";
-import { getUniqueSourceValuesWithLabels } from "@platforma-sdk/model";
+import type {
+  DatasetSelection,
+  PFrameHandle,
+  PObjectId,
+  SUniversalPColumnId,
+} from "@platforma-sdk/model";
+import {
+  createDatasetSelection,
+  createPrimaryRef,
+  getRawPlatformaInstance,
+  getUniqueSourceValuesWithLabels,
+  plRefsEqual,
+} from "@platforma-sdk/model";
+import { PARENT_ID_AXIS } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import {
   PlAccordionSection,
+  PlDatasetSelector,
   PlDropdown,
   PlDropdownMulti,
-  PlDropdownRef,
   PlElementList,
 } from "@platforma-sdk/ui-vue";
 import { computed, ref, watch } from "vue";
@@ -30,8 +42,48 @@ function scoreLabel(ref: SUniversalPColumnId): string {
 // Snapshot the picked dataset's name into data on selection — the model's args-only
 // `.subtitle` reads it from there (it can't resolve the label live). A user-gesture write,
 // not an output→data watchEffect, so no hairpin.
-type StateMatrixRef = NonNullable<typeof app.model.data.stateMatrixRef>;
-function onSelectStateMatrix(ref: StateMatrixRef | undefined) {
+const stateMatrixSelection = computed<DatasetSelection | undefined>({
+  get: () => {
+    const { stateMatrixRef, filterRef } = app.model.data;
+    if (stateMatrixRef === undefined) return undefined;
+    return createDatasetSelection(createPrimaryRef(stateMatrixRef, filterRef));
+  },
+  set: (selection) => {
+    const ref = selection?.primary.column;
+    const filterRef = selection?.primary.filter;
+    const prev = app.model.data.stateMatrixRef;
+    // A new subset of the same dataset keeps the parent and the full-data picks.
+    if (!(ref && prev && plRefsEqual(ref, prev, true))) resetForDataset(ref);
+    else if (!sameRef(filterRef, app.model.data.filterRef)) dropSubsetPicks();
+    app.model.data.filterRef = filterRef;
+    // The subset's label when one is picked: it already carries the dataset as a prefix.
+    const option = ref
+      ? app.model.outputs.stateMatrixOptions?.find((o) => plRefsEqual(o.primary.ref, ref, true))
+      : undefined;
+    const filter = filterRef
+      ? option?.filters?.find((f) => plRefsEqual(f.ref, filterRef, true))
+      : undefined;
+    app.model.data.defaultBlockLabel = (filter ?? option?.primary)?.label ?? "";
+  },
+});
+
+function sameRef(a: typeof app.model.data.filterRef, b: typeof app.model.data.filterRef) {
+  return a === undefined || b === undefined ? a === b : plRefsEqual(a, b, true);
+}
+
+// Picks computed on the previous subset don't fit the new one: the workflow refuses them.
+function dropSubsetPicks() {
+  const stamped = (opts?: { value: SUniversalPColumnId; subset?: string }[]) =>
+    new Set((opts ?? []).filter((o) => o.subset !== undefined).map((o) => o.value));
+  const scores = stamped(app.model.outputs.scoreOptions);
+  const rounds = stamped(app.model.outputs.roundFrequencyOptions);
+  app.model.data.scoreRefs = app.model.data.scoreRefs.filter((r) => !scores.has(r));
+  app.model.data.roundFrequencyRefs = app.model.data.roundFrequencyRefs.filter(
+    (r) => !rounds.has(r),
+  );
+}
+
+function resetForDataset(ref: typeof app.model.data.stateMatrixRef) {
   app.model.data.stateMatrixRef = ref;
   // Clear the parent: it belongs to the previous dataset. selectedParentId is required in
   // args, so this holds the workflow (uncalculated) until the options watch auto-selects a
@@ -44,10 +96,6 @@ function onSelectStateMatrix(ref: StateMatrixRef | undefined) {
   // Open drill-downs name a substitution and score of the previous dataset. The prune in
   // useDrillDowns keeps them when the new run has no scores or reuses the parent id.
   app.model.data.drillDowns = [];
-  app.model.data.defaultBlockLabel =
-    app.model.outputs.stateMatrixOptions?.find(
-      (o) => ref && o.ref.blockId === ref.blockId && o.ref.name === ref.name,
-    )?.label ?? "";
 }
 
 // Enumerate the available parents from the state matrix's parentId axis (idx 1) — straight from
@@ -56,12 +104,35 @@ function onSelectStateMatrix(ref: StateMatrixRef | undefined) {
 // options come from `stateMatrixPf` (which does NOT depend on it), so this can't loop — the same
 // safe, deterministic default-selection shape as the block-label pattern.
 const parentOptions = ref<{ value: string; label: string }[]>([]);
+
+// Parents with variants in the subset: the parent linker inner-joined with the subset column.
+async function subsetParents(
+  frame: PFrameHandle,
+  linkerId: PObjectId,
+  filterId: PObjectId,
+): Promise<Set<string>> {
+  const res = await getRawPlatformaInstance().pFrameDriver.calculateTableData(frame, {
+    src: {
+      type: "inner",
+      entries: [
+        { type: "column", column: linkerId },
+        { type: "column", column: filterId },
+      ],
+    },
+    filters: [],
+    sorting: [],
+  });
+  const parents = res.find((v) => v.spec.type === "axis" && v.spec.spec.name === PARENT_ID_AXIS);
+  return new Set(Array.from((parents?.data.data ?? []) as ArrayLike<unknown>, String));
+}
+
 watch(
   () => ({
     pframe: app.model.outputs.stateMatrixPf,
     colId: app.model.outputs.stateMatrixColId,
+    subset: app.model.outputs.subsetParentsFrame,
   }),
-  async ({ pframe, colId }) => {
+  async ({ pframe, colId, subset }) => {
     if (!pframe || !colId) {
       parentOptions.value = [];
       return;
@@ -71,7 +142,13 @@ watch(
         columnId: colId as PObjectId,
         axisIdx: 1,
       });
-      parentOptions.value = res.values.map((v) => ({ value: v.value, label: v.label }));
+      const all = res.values.map((v) => ({ value: v.value, label: v.label }));
+      // An empty subset reaches no parent; every parent then shows the same empty plot.
+      const inSubset = subset?.frame
+        ? await subsetParents(subset.frame, subset.linkerId, subset.filterId)
+        : undefined;
+      const reached = inSubset && all.filter((o) => inSubset.has(o.value));
+      parentOptions.value = reached && reached.length > 0 ? reached : all;
       const current = app.model.data.selectedParentId;
       if (parentOptions.value.length > 0 && !parentOptions.value.some((o) => o.value === current)) {
         app.model.data.selectedParentId = parentOptions.value[0].value;
@@ -97,15 +174,13 @@ const parentOptionsDisplay = computed(() => {
   <!-- GraphMaker gives the block's settings slot no width, so without this the drawer grows to
        fit the longest line of text. The gap replaces the one this wrapper displaces. -->
   <div class="settings">
-    <PlDropdownRef
-      :model-value="app.model.data.stateMatrixRef"
+    <PlDatasetSelector
+      v-model="stateMatrixSelection"
       :options="app.model.outputs.stateMatrixOptions"
       label="Select dataset"
       clearable
       required
-      @update:model-value="onSelectStateMatrix"
-    >
-    </PlDropdownRef>
+    />
 
     <PlDropdown
       :model-value="app.model.data.selectedParentId"

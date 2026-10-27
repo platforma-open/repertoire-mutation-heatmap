@@ -10,6 +10,9 @@
 // Profiler spec names used as join keys — must stay byte-identical to the names the profiler emits.
 export const STATE_MATRIX = "pl7.app/repertoire/stateMatrix";
 export const VARIANT_KEY_AXIS = "pl7.app/variantKey";
+export const PARENT_ID_AXIS = "pl7.app/repertoire/parentId";
+/** Profiler linker `[parentId, variantKey]`: which parent each variant belongs to. */
+export const PARENT_LINK = "pl7.app/repertoire/parentLink";
 
 // One such column per selected score. Must stay byte-identical to the workflow's import spec.
 export const LANDSCAPE_VALUE = "pl7.app/repertoire/singleMutantValue";

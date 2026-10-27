@@ -47,6 +47,7 @@ export type DrillDown = {
 export type BlockArgs = {
   /** Profiler state matrix `[variantKey, parentId, position] -> state`. */
   stateMatrixRef: PlRef;
+  inputFilter?: string;
   /** Parent to scope the whole plot to. Required — the args projection throws until it is set
    *  (the UI auto-selects the first parent), so the workflow only ever runs single-parent. */
   selectedParentId: string;
@@ -141,11 +142,13 @@ export type BlockDataV5 = BlockData;
 /** Unified persisted data: workflow-relevant selections + UI view state. */
 export type BlockData = {
   // Block label shown as the subtitle. `customBlockLabel` is the user-renamed override;
-  // `defaultBlockLabel` holds the selected dataset's name, snapshotted by the UI on selection
+  // `defaultBlockLabel` holds the selected dataset's (or subset's) name, snapshotted by the UI on selection
   // (the `.subtitle` context is args-only and can't resolve the dataset label live).
   customBlockLabel?: string;
   defaultBlockLabel?: string;
   stateMatrixRef?: PlRef;
+  /** Subset column picked with the state matrix in PlDatasetSelector (variant-keyed). */
+  filterRef?: PlRef;
   /** Parent the plot is scoped to (UI auto-selects the first available on load). */
   selectedParentId?: string;
   /** Ordered per-round frequency columns; `[0]` = baseline R0. Empty = composition view off. */
