@@ -75,10 +75,10 @@ export function drillDownTableModel(
   });
 
   // The score this drill-down was opened from — the one the section header names, and the only
-  // one shown by default. Resolved against the UNDEDUPED discovery: `scoreRefs` ids come from
-  // the same query in `scoreOptions`, but that dedups on name+domain while `dedupByLeafId`
-  // dedups on the leaf id, so the two can keep different reachability variants of one column
-  // and a lookup against `secondary` alone would miss intermittently.
+  // one shown by default. Resolved against the UNDEDUPED discovery: a stored scoreKey is a
+  // recipe id, and `dedupByLeafId` keeps only one reachability variant per leaf. The stored id
+  // may be a different variant — one kept by an earlier dedup rule — so `secondary` can lack it
+  // while `discovered` always holds it.
   const scoreKey = ctx.data.drillDowns.find((d) => d.mutationId === mutationId)?.scoreKey;
   const activeScoreSpec =
     scoreKey === undefined
@@ -91,9 +91,9 @@ export function drillDownTableModel(
   // conditions' worth of scores otherwise opens ~15 columns wide.
   //
   // Matching is by spec, never by id: `ColumnSelector` has no id form. For the score that means
-  // name + domain, which is exactly what tells `Bin score (5.5)` from `(7.5)` — the same
-  // identity `scoreOptions` dedups on. Carrying the whole domain rather than just the condition
-  // keeps this correct for any score whose columns are split on something else as well.
+  // name + domain, which is exactly what tells `Bin score (5.5)` from `(7.5)`. Carrying the whole
+  // domain rather than just the condition keeps this correct for any score whose columns are split
+  // on something else as well.
   const visibility: ColumnVisibilityRule[] = [
     { match: { name: exactMatch("pl7.app/label") }, visibility: "default" },
     { match: { name: exactMatch("pl7.app/repertoire/mutations") }, visibility: "default" },

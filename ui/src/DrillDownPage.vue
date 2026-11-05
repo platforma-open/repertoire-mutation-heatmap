@@ -82,10 +82,14 @@ const valueCol = computed(() => {
 /** Same string the section list shows, derived the same way so the two cannot drift. */
 const pageTitle = computed(() => {
   const key = drillDown.value?.scoreKey;
+  // Picker labels, so the title reads like the sidebar — the same disambiguation the model applies.
+  const labelByRef = new Map<string, string>(
+    (app.model.outputs.scoreOptions ?? []).map((o): [string, string] => [o.value, o.label]),
+  );
   const label =
     key === undefined
       ? undefined
-      : scoreLabelsByKey(app.model.outputs.singleMutantHeatmapPCols)[key];
+      : scoreLabelsByKey(app.model.outputs.singleMutantHeatmapPCols, labelByRef)[key];
   return drillDownLabel(mutationId.value, label);
 });
 
