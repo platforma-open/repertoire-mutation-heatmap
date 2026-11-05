@@ -3,6 +3,7 @@ import type {
   InferOutputsType,
   PColumnSpec,
   PFrameHandle,
+  RenderCtx,
   SUniversalPColumnId,
 } from "@platforma-sdk/model";
 import { kind } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.kind";
@@ -11,6 +12,7 @@ import {
   makeLandscapeChartState,
   mapChartStates,
   withEmptyNAValue,
+  withErrorOpacityRange,
   withParentOnXAxis,
   withRegionColoursReseeded,
   withYAnnotationTitleAtBottom,
@@ -19,7 +21,10 @@ import { dedupByLeafId, exactMatch, outputPColumns, poolSpecByRef } from "./rend
 import { drillDownTableModel } from "./drill-down-table";
 import {
   BROWSABLE_MUTATION,
+  LANDSCAPE_ERROR,
+  LANDSCAPE_NT_VARIANTS,
   LANDSCAPE_SCORE_INDEX,
+  LANDSCAPE_SCORE_INDEX_DOMAIN,
   LANDSCAPE_SCORE_REF,
   LANDSCAPE_VALUE,
   PARENT_LINK,
@@ -34,15 +39,17 @@ import type {
   BlockDataV3,
   BlockDataV4,
   BlockDataV5,
+  BlockDataV6,
   LandscapePanel,
 } from "./types";
 
 // The model's public surface is the package root; the files are an internal split.
 export type * from "./types";
-export { PARENT_ID_AXIS } from "./specs";
+export { PAIR_ERROR, PAIR_NT_VARIANTS, PARENT_ID_AXIS } from "./specs";
 export {
   makeDrillDownChartState,
   makeLandscapeChartState,
+  withErrorOpacityRange,
   withParentOnXAxis,
   withRegionColoursReseeded,
   withYAnnotationTitleAtBottom,
@@ -84,9 +91,14 @@ export function drillDownLabel(mutationId: string, scoreLabel: string | undefine
  * Shared by the `landscapePanels` output and by `.sections()`, which needs the same list to name
  * one page per score — two derivations of "which charts exist" would drift the moment one of
  * them changed.
+ *
+ * `labelByRef` maps a score's ref to its picker label. The workflow stamps each column with the
+ * score's own native label, which two sibling blocks share. The picker already told them apart, so
+ * its label is used when given, and the stamped one is the fallback.
  */
 export function landscapePanelsFrom(
   pCols: { spec: PColumnSpec }[] | undefined,
+  labelByRef?: Map<string, string>,
 ): LandscapePanel[] | undefined {
   if (pCols === undefined) return undefined;
   const panels: LandscapePanel[] = [];
@@ -96,11 +108,18 @@ export function landscapePanelsFrom(
     // Pre-per-score-charts run: no ref, so no state key. Such a project shows the empty state
     // until it is re-run.
     if (key === undefined) continue;
+    const scoreIndex = col.spec.domain?.[LANDSCAPE_SCORE_INDEX_DOMAIN];
+    const companion = (name: string) =>
+      pCols.find(
+        (c) => c.spec.name === name && c.spec.domain?.[LANDSCAPE_SCORE_INDEX_DOMAIN] === scoreIndex,
+      )?.spec;
     panels.push({
       key,
-      label: col.spec.annotations?.["pl7.app/label"] ?? "Score",
+      label: labelByRef?.get(key) ?? col.spec.annotations?.["pl7.app/label"] ?? "Score",
       index: Number(col.spec.annotations?.[LANDSCAPE_SCORE_INDEX] ?? "0"),
       spec: col.spec,
+      errorSpec: companion(LANDSCAPE_ERROR),
+      ntVariantsSpec: companion(LANDSCAPE_NT_VARIANTS),
     });
   }
   panels.sort((a, b) => a.index - b.index);
@@ -153,7 +172,13 @@ function runColumnOptions(
     const stamp = subsetStampOf(e.spec);
     return stamp === undefined || stamp === inputFilter;
   });
-  const labels = deriveDistinctLabels(fitting.map((e) => e.spec));
+  // Always show the native column label, so sibling blocks that produce the same score or round
+  // stay told apart by their trace. Without this, a label is dropped once it is not needed for
+  // uniqueness, and two upstream copies read identically in the picker.
+  const labels = deriveDistinctLabels(
+    fitting.map((e) => e.spec),
+    { includeNativeLabel: true },
+  );
   return fitting.map((e, i) => ({
     label: labels[i] ?? e.id,
     value: e.id as SUniversalPColumnId,
@@ -176,18 +201,78 @@ export function landscapeLabel(scoreLabel: string): string {
   return `Landscape · ${scoreLabel}`;
 }
 
-/** score id -> display label, from the columns the last run produced. */
+/**
+ * score id -> display label, from the columns the last run produced.
+ *
+ * `labelByRef` carries the picker labels, which tell sibling blocks' same-named scores apart. It is
+ * preferred per score; the column's stamped label is the fallback. See {@link landscapePanelsFrom}.
+ */
 export function scoreLabelsByKey(
   pCols: { spec: PColumnSpec }[] | undefined,
+  labelByRef?: Map<string, string>,
 ): Record<string, string> {
   const labels: Record<string, string> = {};
   for (const col of pCols ?? []) {
     if (col.spec.name !== LANDSCAPE_VALUE) continue;
     const key = col.spec.annotations?.[LANDSCAPE_SCORE_REF];
-    const label = col.spec.annotations?.["pl7.app/label"];
+    const label = labelByRef?.get(key ?? "") ?? col.spec.annotations?.["pl7.app/label"];
     if (key !== undefined && label !== undefined) labels[key] = label;
   }
   return labels;
+}
+
+/**
+ * Score picker options from the result pool.
+ *
+ * Shared by the `scoreOptions` output and by section / panel naming, so a score's page is named by
+ * the same label the user picked it under, and the two cannot drift.
+ *
+ * Discovered via discover() (not getCanonicalOptions — see roundFrequencyOptions for why) anchored
+ * on the state matrix. The anchor name `main` must match the workflow's `bb.addAnchor(...)`.
+ *
+ * Numeric only — a cell holds one variant's score. NOT restricted to `pl7.app/isScore`: no shipped
+ * block emits a variant-keyed column carrying that annotation yet (repertoire-score is
+ * clonotype-keyed), so filtering on it would leave the dropdown empty. Revisit once the bin-score
+ * block lands.
+ */
+function computeScoreOptions(
+  ctx: RenderCtx<BlockArgs, BlockData>,
+): { label: string; value: SUniversalPColumnId; subset?: string }[] | undefined {
+  const stateMatrixRef = ctx.data.stateMatrixRef;
+  if (stateMatrixRef === undefined) return undefined;
+  const stateSpec = poolSpecByRef(ctx, stateMatrixRef);
+  if (!stateSpec) return undefined;
+
+  // The result pool is handed over whole (the `"result_pool"` shorthand) rather than
+  // pre-filtered column by column. Linkers are dropped host-side; File-valued columns
+  // cannot be named in a selector, and the numeric check below already excludes them.
+  const columns = ColumnsCollection(["result_pool"])
+    .discover({
+      anchors: { main: stateSpec },
+      mode: "enrichment",
+      maxHops: 0,
+      exclude: [{ annotations: { "pl7.app/isLinkerColumn": exactMatch("true") } }],
+    })
+    .getColumns();
+
+  // The anchor's own axis 0 rather than a literal, so the check stays on the axis this dataset
+  // is actually keyed on.
+  const variantAxisName = stateSpec.axesSpec[0]?.name;
+  // Dedup by leaf id, not by name + domain: a sibling block's score column shares the name, and
+  // the producing block's identity sits in contextDomain, not domain, so a name + domain key
+  // collides and drops it. The leaf id collapses only the same storage column reached by several
+  // paths. Same approach as roundFrequencyOptions.
+  const entries = dedupByLeafId(
+    columns.filter((recipe) => isLandscapeScoreColumn(recipe.getSpec(), variantAxisName)),
+  ).map((recipe) => ({ id: recipe.id, spec: recipe.getSpec() }));
+  return runColumnOptions(entries, inputFilterOf(ctx.data));
+}
+
+/** ref -> picker label for the discovered scores. See {@link computeScoreOptions}. */
+function scoreLabelByRefFrom(ctx: RenderCtx<BlockArgs, BlockData>): Map<string, string> {
+  return new Map<string, string>(
+    (computeScoreOptions(ctx) ?? []).map((o): [string, string] => [o.value, o.label]),
+  );
 }
 
 export function drillDownHref(mutationId: string): `/drilldown?m=${string}` {
@@ -228,10 +313,23 @@ const dataModel = new DataModelBuilder({ kind })
     ...mapChartStates(v4, withRegionColoursReseeded),
   }))
   // The Y-axis amino acid tracks: their titles go below the map, on every saved chart.
-  .migrate<BlockData>("v6", (v5) => ({
+  .migrate<BlockDataV6>("v6", (v5) => ({
     ...v5,
     ...mapChartStates(v5, withYAnnotationTitleAtBottom),
     drillDownChartState: withYAnnotationTitleAtBottom(v5.drillDownChartState),
+  }))
+  // The reversed error opacity, on the landscape and drill-down charts. Not the composition map:
+  // it has no error to fade by.
+  .migrate<BlockData>("v7", (v6) => ({
+    ...v6,
+    singleMutantHeatmapState: withErrorOpacityRange(v6.singleMutantHeatmapState),
+    singleMutantHeatmapStates: Object.fromEntries(
+      Object.entries(v6.singleMutantHeatmapStates).map(([key, state]) => [
+        key,
+        withErrorOpacityRange(state),
+      ]),
+    ),
+    drillDownChartState: withErrorOpacityRange(v6.drillDownChartState),
   }))
   .init(() => ({
     drillDowns: [],
@@ -352,50 +450,8 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     });
   })
 
-  // Per-variant numeric score columns for the mutation landscape. Discovered via
-  // discover() (not getCanonicalOptions — see roundFrequencyOptions for why) anchored on the
-  // state matrix. The anchor name `main` must match the workflow's `bb.addAnchor(...)`.
-  //
-  // Numeric only — a cell holds one variant's score. NOT restricted to `pl7.app/isScore`: no
-  // shipped block emits a variant-keyed column carrying that annotation yet (repertoire-score is
-  // clonotype-keyed), so filtering on it would leave the dropdown empty. Revisit once the
-  // bin-score block lands.
-  .output("scoreOptions", (ctx) => {
-    const stateMatrixRef = ctx.data.stateMatrixRef;
-    if (stateMatrixRef === undefined) return undefined;
-    const stateSpec = poolSpecByRef(ctx, stateMatrixRef);
-    if (!stateSpec) return undefined;
-
-    const anchors: Record<string, PColumnSpec> = { main: stateSpec };
-
-    // The result pool is handed over whole (the `"result_pool"` shorthand) rather than
-    // pre-filtered column by column. Linkers are dropped host-side; File-valued columns
-    // cannot be named in a selector, and the numeric check below already excludes them.
-    const columns = ColumnsCollection(["result_pool"])
-      .discover({
-        anchors,
-        mode: "enrichment",
-        maxHops: 0,
-        exclude: [{ annotations: { "pl7.app/isLinkerColumn": exactMatch("true") } }],
-      })
-      .getColumns();
-
-    // The anchor's own axis 0 rather than a literal, so the check stays on the axis this dataset
-    // is actually keyed on.
-    const variantAxisName = stateSpec.axesSpec[0]?.name;
-    const seen = new Set<string>();
-    const entries: { id: string; spec: PColumnSpec }[] = [];
-    for (const recipe of columns) {
-      const spec = recipe.getSpec();
-      if (!isLandscapeScoreColumn(spec, variantAxisName)) continue;
-      // Dedup reachability variants of one column (by identity, not anchored id).
-      const dedupKey = spec.name + "|" + JSON.stringify(spec.domain ?? {});
-      if (seen.has(dedupKey)) continue;
-      seen.add(dedupKey);
-      entries.push({ id: recipe.id, spec });
-    }
-    return runColumnOptions(entries, inputFilterOf(ctx.data));
-  })
+  // Per-variant numeric score columns for the mutation landscape. See computeScoreOptions.
+  .output("scoreOptions", (ctx) => computeScoreOptions(ctx))
 
   // Per-round frequency columns from the enrichment block (composition-enrichment view).
   // Each round is one `pl7.app/frequency` column carrying its round identity in domain
@@ -501,7 +557,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   // produced columns, not `data.scoreRefs`: while the block is stale the two disagree, and the
   // columns are what is actually on screen.
   .output("landscapePanels", (ctx): LandscapePanel[] | undefined =>
-    landscapePanelsFrom(outputPColumns(ctx, "singleMutantHeatmapPf")),
+    landscapePanelsFrom(outputPColumns(ctx, "singleMutantHeatmapPf"), scoreLabelByRefFrom(ctx)),
   )
 
   // Single-mutant variants of the selected parent in the last run. Undefined until a run with
@@ -572,7 +628,10 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
 
   .sections((ctx) => {
     const pCols = outputPColumns(ctx, "singleMutantHeatmapPf");
-    const panels = landscapePanelsFrom(pCols) ?? [];
+    // Picker labels, so a page is named the way its score reads in Settings — sibling blocks'
+    // same-named scores included.
+    const labelByRef = scoreLabelByRefFrom(ctx);
+    const panels = landscapePanelsFrom(pCols, labelByRef) ?? [];
 
     // A section is one line of text: no subtitle, no indentation, and a delimiter carries no
     // label. Grouping is therefore the only way to say what a run of entries is, which is why
@@ -599,7 +658,7 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     // appears the moment a substitution is browsed into — no Run, and nothing goes stale.
     const drillDowns = ctx.data.drillDowns ?? [];
     if (drillDowns.length > 0) {
-      const scoreLabels = scoreLabelsByKey(pCols);
+      const scoreLabels = scoreLabelsByKey(pCols, labelByRef);
       sections.push({ type: "delimiter" });
       for (const d of drillDowns) {
         sections.push({

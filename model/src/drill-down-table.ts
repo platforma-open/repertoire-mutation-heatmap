@@ -1,6 +1,14 @@
 import type { ColumnVisibilityRule, PlDataTableModel, RenderCtx } from "@platforma-sdk/model";
 import { ColumnsCollection, DataColumn, createPlDataTableV3 } from "@platforma-sdk/model";
-import { MUTATION_ID_AXIS, MUTATION_VARIANT_LINK, VARIANT_KEY_AXIS } from "./specs";
+import {
+  LANDSCAPE_ERROR_COLUMN,
+  LANDSCAPE_NT_VARIANTS_COLUMN,
+  LANDSCAPE_SCORE_REF,
+  LANDSCAPE_VALUE,
+  MUTATION_ID_AXIS,
+  MUTATION_VARIANT_LINK,
+  VARIANT_KEY_AXIS,
+} from "./specs";
 import type { BlockArgs, BlockData } from "./types";
 import { dedupByLeafId, exactMatch, outputPColumns, poolSpecByRef } from "./render-utils";
 
@@ -67,10 +75,10 @@ export function drillDownTableModel(
   });
 
   // The score this drill-down was opened from — the one the section header names, and the only
-  // one shown by default. Resolved against the UNDEDUPED discovery: `scoreRefs` ids come from
-  // the same query in `scoreOptions`, but that dedups on name+domain while `dedupByLeafId`
-  // dedups on the leaf id, so the two can keep different reachability variants of one column
-  // and a lookup against `secondary` alone would miss intermittently.
+  // one shown by default. Resolved against the UNDEDUPED discovery: a stored scoreKey is a
+  // recipe id, and `dedupByLeafId` keeps only one reachability variant per leaf. The stored id
+  // may be a different variant — one kept by an earlier dedup rule — so `secondary` can lack it
+  // while `discovered` always holds it.
   const scoreKey = ctx.data.drillDowns.find((d) => d.mutationId === mutationId)?.scoreKey;
   const activeScoreSpec =
     scoreKey === undefined
@@ -83,9 +91,9 @@ export function drillDownTableModel(
   // conditions' worth of scores otherwise opens ~15 columns wide.
   //
   // Matching is by spec, never by id: `ColumnSelector` has no id form. For the score that means
-  // name + domain, which is exactly what tells `Bin score (5.5)` from `(7.5)` — the same
-  // identity `scoreOptions` dedups on. Carrying the whole domain rather than just the condition
-  // keeps this correct for any score whose columns are split on something else as well.
+  // name + domain, which is exactly what tells `Bin score (5.5)` from `(7.5)`. Carrying the whole
+  // domain rather than just the condition keeps this correct for any score whose columns are split
+  // on something else as well.
   const visibility: ColumnVisibilityRule[] = [
     { match: { name: exactMatch("pl7.app/label") }, visibility: "default" },
     { match: { name: exactMatch("pl7.app/repertoire/mutations") }, visibility: "default" },
@@ -104,16 +112,25 @@ export function drillDownTableModel(
       visibility: "default",
     },
   ];
-  if (activeScoreSpec !== undefined)
-    visibility.push({
-      match: {
-        name: exactMatch(activeScoreSpec.name),
-        domain: Object.fromEntries(
-          Object.entries(activeScoreSpec.domain ?? {}).map(([k, v]) => [k, exactMatch(v)]),
-        ),
-      },
-      visibility: "default",
-    });
+  if (activeScoreSpec !== undefined) {
+    const scoreDomain = Object.fromEntries(
+      Object.entries(activeScoreSpec.domain ?? {}).map(([k, v]) => [k, exactMatch(v)]),
+    );
+    // The score's error and variant count beside it. Their names are recorded on the landscape
+    // column the run produced for this score; they share the score's domain.
+    const landscapeCol = outputPColumns(ctx, "singleMutantHeatmapPf")?.find(
+      (c) =>
+        c.spec.name === LANDSCAPE_VALUE && c.spec.annotations?.[LANDSCAPE_SCORE_REF] === scoreKey,
+    );
+    const companionNames = [LANDSCAPE_ERROR_COLUMN, LANDSCAPE_NT_VARIANTS_COLUMN]
+      .map((key) => landscapeCol?.spec.annotations?.[key])
+      .filter((name): name is string => name !== undefined);
+    for (const name of [activeScoreSpec.name, ...companionNames])
+      visibility.push({
+        match: { name: exactMatch(name), domain: scoreDomain },
+        visibility: "default",
+      });
+  }
   // Catch-all, LAST — first matching rule wins. A bare `.*` is an unanchored regex, so it
   // matches every name; an empty selector is not used, since "matches nothing specified" is not
   // a documented shorthand for "matches everything".

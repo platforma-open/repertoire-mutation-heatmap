@@ -14,6 +14,10 @@ export type LandscapePanel = {
   /** Position in the user's score order. */
   index: number;
   spec: PColumnSpec;
+  /** The score's error on the same cells, when the score has one. */
+  errorSpec?: PColumnSpec;
+  /** How many synonymous nucleotide variants stand behind each cell's value, when known. */
+  ntVariantsSpec?: PColumnSpec;
 };
 
 /** One open per-position variant browser, added by browsing into a substitution. */
@@ -138,6 +142,9 @@ export type BlockDataV4 = Omit<
 
 /** Data version `v5`: today's shape; `v6` only rewrites chart states. */
 export type BlockDataV5 = BlockData;
+
+/** Data version `v6`: today's shape; `v7` only rewrites chart states. */
+export type BlockDataV6 = BlockData;
 
 /** Unified persisted data: workflow-relevant selections + UI view state. */
 export type BlockData = {

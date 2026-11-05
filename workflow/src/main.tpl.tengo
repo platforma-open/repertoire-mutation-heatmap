@@ -61,6 +61,29 @@ VARIANT_KEY_AXIS := "pl7.app/variantKey"
 PARENT_ID_AXIS := "pl7.app/repertoire/parentId"
 POSITION_AXIS := "pl7.app/repertoire/position"
 
+// A score's measurement error and the count of synonymous nucleotide variants behind it, keyed by
+// the score's column name. Producers set no link from a score to its companions, so the pairs are
+// listed here. A companion carries its score's exact domain, which tells it apart from the same
+// producer's companions of other conditions, gates and comparisons.
+SCORE_COMPANIONS := {
+	"pl7.app/facsBin/gateRankMean": {
+		"error": "pl7.app/facsBin/gateRankMeanUncertainty",
+		"ntVariants": "pl7.app/facsBin/ntVariants"
+	},
+	"pl7.app/facsBin/gateEnrichment": {
+		"error": "pl7.app/facsBin/gateEnrichmentUncertainty",
+		"ntVariants": "pl7.app/facsBin/gateEnrichmentNtVariants"
+	},
+	"pl7.app/enrichment": {
+		"error": "pl7.app/enrichment/uncertainty",
+		"ntVariants": "pl7.app/enrichment/ntVariants"
+	},
+	"pl7.app/enrichment/parentNormalized": {
+		"error": "pl7.app/enrichment/parentNormalizedUncertainty"
+	}
+}
+COMPANION_KINDS := ["error", "ntVariants"]
+
 wf.prepare(func(args) {
 	bb := wf.createPBundleBuilder()
 	bb.ignoreMissingDomains()
@@ -124,6 +147,21 @@ wf.prepare(func(args) {
 	if !is_undefined(args.scoreRefs) {
 		for ref in args.scoreRefs {
 			bb.addSingle(ref)
+		}
+	}
+	// Every candidate companion on the variant axis; which one belongs to which score is decided in
+	// the body by matching domains. addMulti so a score without companions resolves to empty.
+	if !is_undefined(args.scoreRefs) && len(args.scoreRefs) > 0 {
+		for scoreName in maps.getKeys(SCORE_COMPANIONS) {
+			for kind in COMPANION_KINDS {
+				companionName := SCORE_COMPANIONS[scoreName][kind]
+				if !is_undefined(companionName) {
+					bb.addMulti({
+						name: companionName,
+						axes: [{ anchor: "main", idx: 0 }]
+					}, "companion/" + companionName)
+				}
+			}
 		}
 	}
 	// Per-round frequency columns from the enrichment block (composition-enrichment view).
@@ -614,6 +652,48 @@ wf.body(func(args) {
 			return undefined
 		}
 
+		sameDomain := func(a, b) {
+			a = is_undefined(a) ? {} : a
+			b = is_undefined(b) ? {} : b
+			if len(a) != len(b) {
+				return false
+			}
+			for k, v in a {
+				if b[k] != v {
+					return false
+				}
+			}
+			return true
+		}
+
+		// The score's companion of one kind ("error" or "ntVariants"), or undefined. More than one
+		// match counts as none: picking by iteration order would pair a score with another run's
+		// error and draw a plausible-looking map.
+		companionFor := func(scoreSpec, kind) {
+			if is_undefined(scoreSpec) || is_undefined(SCORE_COMPANIONS[scoreSpec.name]) {
+				return undefined
+			}
+			companionName := SCORE_COMPANIONS[scoreSpec.name][kind]
+			if is_undefined(companionName) {
+				return undefined
+			}
+			entries := columns.getColumns("companion/" + companionName)
+			if is_undefined(entries) {
+				return undefined
+			}
+			found := undefined
+			for entry in entries {
+				if is_undefined(entry.spec) || !sameDomain(entry.spec.domain, scoreSpec.domain) {
+					continue
+				}
+				if !is_undefined(found) {
+					return undefined
+				}
+				found = entry
+			}
+			return found
+		}
+
 		// --- Drill-down precalc ---
 		// Everything a click needs, computed once for EVERY cell. A click then filters data the
 		// block already holds, so it opens instantly and needs no Run — which is what keeps the
@@ -792,6 +872,31 @@ wf.body(func(args) {
 				pt.col(sHeader).alias("scoreValue")
 			)
 
+			// Left-joined, so a variant the companion has no row for keeps its score with a null
+			// beside it. Carried through every step below as extra columns of the same rows, so a
+			// cell's error is always the error of the variant whose score it shows.
+			companions := []
+			companionCols := []
+			companionFirsts := []
+			for kind in COMPANION_KINDS {
+				entry := companionFor(sSpec, kind)
+				if is_undefined(entry) {
+					continue
+				}
+				cHeader := kind + "_" + string(i)
+				valueType := kind == "error" ? "Double" : "Int"
+				sDf = sDf.join(
+					ptWf.frame(pt.p.column(cHeader, entry)).select(
+						pt.axis(VARIANT_KEY_AXIS).alias("variantKey"),
+						pt.col(cHeader).cast(valueType).alias(kind)
+					),
+					{ on: "variantKey", how: "left" }
+				)
+				companions = append(companions, { kind: kind, valueType: valueType, spec: entry.spec })
+				companionCols = append(companionCols, pt.col(kind))
+				companionFirsts = append(companionFirsts, pt.col(kind).first().alias(kind))
+			}
+
 			scoreFile := "singleMutantLandscape_" + string(i) + ".tsv"
 
 			// Where this score has a matching per-position baseline, that baseline fills the parent
@@ -818,7 +923,8 @@ wf.body(func(args) {
 					pt.col("variantKey"),
 					// Cast so an integer-valued score still lands in the Double-typed imported
 					// column.
-					pt.col("scoreValue").cast("Double").alias("scoreValue")
+					pt.col("scoreValue").cast("Double").alias("scoreValue"),
+					companionCols...
 				)
 
 			if !is_undefined(baselineEntry) {
@@ -832,6 +938,12 @@ wf.body(func(args) {
 				)
 				if !is_undefined(args.selectedParentId) {
 					baselineDf = baselineDf.filter(pt.col("parentId").eq(pt.lit(args.selectedParentId)))
+				}
+				// The baseline has no error of its own, so its companions are null.
+				baselineCompanions := []
+				for c in companions {
+					baselineCompanions = append(baselineCompanions,
+						pt.lit(undefined).cast(c.valueType).alias(c.kind))
 				}
 				// Onto the parent's own residue at each position — the cell the single-mutant data
 				// leaves empty by construction. Inner join, so a position the baseline covers but
@@ -848,7 +960,8 @@ wf.body(func(args) {
 						pt.col("position"),
 						pt.col("parentResidue").alias("state"),
 						pt.col("variantKey"),
-						pt.col("baselineLevel").cast("Double").alias("scoreValue")
+						pt.col("baselineLevel").cast("Double").alias("scoreValue"),
+						baselineCompanions...
 					)
 				cellValues = pt.concat([cellValues, baselineCells])
 			}
@@ -863,7 +976,7 @@ wf.body(func(args) {
 			cellValues.
 				sort(["position", "state", "variantKey"]).
 				groupBy("position", "state").
-				agg(pt.col("scoreValue").first().alias("cellValue")).
+				agg(pt.col("scoreValue").first().alias("cellValue"), companionFirsts...).
 				save(scoreFile)
 
 			// The drill-down carries the score whose map was clicked, so it never silently
@@ -882,7 +995,8 @@ wf.body(func(args) {
 					pt.col("partnerMutation"),
 					pt.col("variantKey"),
 					pt.col("variantLabel"),
-					pt.col("scoreValue").cast("Double").alias("scoreValue")
+					pt.col("scoreValue").cast("Double").alias("scoreValue"),
+					companionCols...
 				).
 				sort(["mutationId", "position", "state", "variantKey"]).
 				groupBy("mutationId", "position", "state").
@@ -890,7 +1004,8 @@ wf.body(func(args) {
 					pt.col("scoreValue").first().alias("cellValue"),
 					pt.col("partnerMutation").cast("String").first().alias("partnerMutation"),
 					// The label is what the tooltip shows; the key only ever served the join.
-					pt.col("variantLabel").cast("String").first().alias("variantKey")
+					pt.col("variantLabel").cast("String").first().alias("variantKey"),
+					companionFirsts...
 				).
 				save(pairFile)
 
@@ -902,7 +1017,8 @@ wf.body(func(args) {
 				pairFile: pairFile,
 				// The parent row and the colour scale switch together, on the one condition that
 				// decides what those cells hold.
-				hasBaseline: !is_undefined(baselineEntry)
+				hasBaseline: !is_undefined(baselineEntry),
+				companions: companions
 			}]
 		}
 	}
@@ -1183,6 +1299,37 @@ wf.body(func(args) {
 	)
 	outputs := {}
 
+	// Import entries for a score's companions, riding the same file as its cell value. allowNA, or
+	// the import would drop every row whose companion is null — the baseline cells among them.
+	companionImports := func(m, namePrefix) {
+		res := []
+		for c in m.companions {
+			label := m.label + (c.kind == "error" ? " Error" : " NT Variants")
+			annotations := { "pl7.app/label": label, "pl7.app/min": "0" }
+			if !is_undefined(c.spec.annotations) {
+				for key in ["pl7.app/format", "pl7.app/description"] {
+					if !is_undefined(c.spec.annotations[key]) {
+						annotations[key] = c.spec.annotations[key]
+					}
+				}
+			}
+			res = append(res, {
+				column: c.kind,
+				allowNA: true,
+				spec: {
+					name: namePrefix + (c.kind == "error" ? "Error" : "NtVariants"),
+					valueType: c.valueType,
+					domain: {
+						"pl7.app/alphabet": alphabet,
+						"pl7.app/repertoire/landscapeScore": string(m.index)
+					},
+					annotations: annotations
+				}
+			})
+		}
+		return res
+	}
+
 	// --- Single-mutant landscape import + export (optional) ---
 	// One value column per score, each [position, state] -> cellValue, scoped to the selected
 	// parent. Position is inherited from the profiler; state is block-local. Neither score nor
@@ -1199,6 +1346,12 @@ wf.body(func(args) {
 				// survive a reorder. Annotation, not domain: lineage, not identity.
 				"pl7.app/repertoire/landscapeScoreRef": m.ref,
 				"pl7.app/repertoire/landscapeScoreIndex": string(m.index)
+			}
+			// The upstream companion columns by name, so the drill-down table can show the active
+			// score's own error beside it.
+			for c in m.companions {
+				lsAnnotations["pl7.app/repertoire/landscapeScore" +
+					(c.kind == "error" ? "Error" : "NtVariants") + "Column"] = c.spec.name
 			}
 			// Log, because an enrichment is multiplicative: half the baseline and twice it sit the
 			// same distance either side. `log` selects d3's `scaleSymlog`, which is defined at
@@ -1247,7 +1400,7 @@ wf.body(func(args) {
 							},
 							annotations: lsAnnotations
 						}
-					}],
+					}] + companionImports(m, "pl7.app/repertoire/singleMutant"),
 					storageFormat: "Parquet",
 					partitionKeyLength: 0
 				},
@@ -1421,7 +1574,7 @@ wf.body(func(args) {
 								}
 							}
 						}
-					],
+					] + companionImports(m, "pl7.app/repertoire/pairMutant"),
 					storageFormat: "Parquet",
 					partitionKeyLength: 0
 				},

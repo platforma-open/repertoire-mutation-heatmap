@@ -7,6 +7,8 @@ import {
   landscapePanelsFrom,
   scoreLabelsByKey,
   makeDrillDownChartState,
+  makeLandscapeChartState,
+  withErrorOpacityRange,
   withParentOnXAxis,
   withRegionColoursReseeded,
   withYAnnotationTitleAtBottom,
@@ -292,5 +294,68 @@ describe("isLandscapeScoreColumn", () => {
 
   test("refuses everything when the anchor has no axis to name", () => {
     expect(isLandscapeScoreColumn(col("Double", [VARIANT]), undefined)).toBe(false);
+  });
+});
+
+describe("landscapePanelsFrom — error companions", () => {
+  const col = (name: string, index: string, annotations: Record<string, string> = {}) => ({
+    spec: {
+      name,
+      domain: { "pl7.app/repertoire/landscapeScore": index },
+      annotations: {
+        "pl7.app/repertoire/landscapeScoreRef": `s${index}`,
+        "pl7.app/repertoire/landscapeScoreIndex": index,
+        "pl7.app/label": `Score ${index}`,
+        ...annotations,
+      },
+    },
+  });
+  const VALUE = "pl7.app/repertoire/singleMutantValue";
+  const ERROR = "pl7.app/repertoire/singleMutantError";
+  const NT = "pl7.app/repertoire/singleMutantNtVariants";
+
+  test("pairs each score with its own error and variant count, by the score index", () => {
+    const panels = landscapePanelsFrom([
+      col(VALUE, "0"),
+      col(VALUE, "1"),
+      col(ERROR, "1"),
+      col(NT, "1"),
+      col(ERROR, "0"),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ] as any);
+    expect(panels?.[0].errorSpec?.domain?.["pl7.app/repertoire/landscapeScore"]).toBe("0");
+    expect(panels?.[0].ntVariantsSpec).toBeUndefined();
+    expect(panels?.[1].errorSpec?.domain?.["pl7.app/repertoire/landscapeScore"]).toBe("1");
+    expect(panels?.[1].ntVariantsSpec?.name).toBe(NT);
+  });
+
+  test("a score with no error column gets no error", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const panels = landscapePanelsFrom([col(VALUE, "0"), col(ERROR, "1")] as any);
+    expect(panels?.[0].errorSpec).toBeUndefined();
+  });
+});
+
+describe("error opacity", () => {
+  test("new landscape and drill-down charts fade the largest error, not the smallest", () => {
+    const range = { min: 1, max: 0.15 };
+    expect(makeLandscapeChartState("t", null).layersSettings?.heatmap?.opacityRange).toEqual(range);
+    expect(makeDrillDownChartState().layersSettings?.heatmap?.opacityRange).toEqual(range);
+  });
+
+  test("a saved chart gets the reversed range and keeps its other heatmap settings", () => {
+    const saved = {
+      ...savedChart([]),
+      layersSettings: { heatmap: { NAValueAs: null, opacityRange: { min: 0.1, max: 1 } } },
+    } as unknown as GraphMakerState;
+    const heatmap = withErrorOpacityRange(saved).layersSettings?.heatmap;
+    expect(heatmap?.opacityRange).toEqual({ min: 1, max: 0.15 });
+    expect(heatmap?.NAValueAs).toBeNull();
+  });
+
+  test("charts do not share one range object, so editing one cannot move another", () => {
+    const a = makeLandscapeChartState("a", null).layersSettings?.heatmap?.opacityRange;
+    const b = makeLandscapeChartState("b", null).layersSettings?.heatmap?.opacityRange;
+    expect(a).not.toBe(b);
   });
 });

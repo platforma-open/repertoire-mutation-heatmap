@@ -2,6 +2,13 @@ import type { GraphMakerState } from "@milaboratories/graph-maker";
 import type { BlockData } from "./types";
 
 /**
+ * Opacity range, reversed for the error column the page binds: the smallest error draws solid and
+ * the largest faint. A column bound to opacity by hand fades the other way round. Dragging the
+ * range slider re-sorts the two ends, which undoes the reversal.
+ */
+const ERROR_OPACITY_RANGE = { min: 1, max: 0.15 };
+
+/**
  * Default state for a mutation-landscape chart. Used by `init` for the placeholder and by the UI
  * for each score a run produces, so the two look alike.
  *
@@ -26,6 +33,7 @@ export function makeLandscapeChartState(
         // keeps those empty; the default of 0 would paint them as real cells at the bottom of
         // the colour scale, filling the map with substitutions that were never measured.
         NAValueAs: null,
+        opacityRange: { ...ERROR_OPACITY_RANGE },
       },
     },
     // Square cells, matching the enrichment map. No `facetColumns`: no facets left to lay out.
@@ -208,6 +216,20 @@ export function withYAnnotationTitleAtBottom(state: GraphMakerState): GraphMaker
     axesSettings: {
       ...state.axesSettings,
       axisY: { ...state.axesSettings?.axisY, annotationTitlePosition: "bottom" },
+    },
+  };
+}
+
+/**
+ * Seeds the reversed error opacity on a saved chart. Layer settings are seeded once, when a chart
+ * is created, so an older chart would otherwise fade its most certain cells.
+ */
+export function withErrorOpacityRange(state: GraphMakerState): GraphMakerState {
+  return {
+    ...state,
+    layersSettings: {
+      ...state.layersSettings,
+      heatmap: { ...state.layersSettings?.heatmap, opacityRange: { ...ERROR_OPACITY_RANGE } },
     },
   };
 }
