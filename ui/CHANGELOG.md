@@ -1,5 +1,21 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.ui
 
+## 1.4.0
+
+### Minor Changes
+
+- 51df748: Show score errors on the mutation maps
+
+  - A score's error from Sort-Seq Analysis or Enrichment Analysis fades its cells: a large error draws faint, a small one solid
+  - The error and the number of synonymous nucleotide variants behind it appear in the cell tooltip and, for the browsed score, in the drill-down table
+  - A map whose score has an error says how to read the fade, in a notice that can be closed
+  - Upgrade graph-maker to 1.10.3 and the Platforma SDK to the latest versions
+
+### Patch Changes
+
+- Updated dependencies [51df748]
+  - @platforma-open/milaboratories.repertoire-mutation-heatmap.model@1.4.0
+
 ## 1.3.0
 
 ### Minor Changes
