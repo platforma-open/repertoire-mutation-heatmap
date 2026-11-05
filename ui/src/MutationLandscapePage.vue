@@ -12,6 +12,7 @@ import { computed, ref, watch } from "vue";
 import { aaPropertyOptions } from "./aaPropertyOptions";
 import { useApp } from "./app";
 import { useDrillDowns } from "./drillDown";
+import { ERROR_NOTICE, useErrorNotice } from "./errorNotice";
 import Settings from "./Settings.vue";
 
 const app = useApp<`/?score=${string}`>();
@@ -118,6 +119,28 @@ const coOccurrenceOption = computed((): PredefinedGraphOption<"heatmap">[] => {
   );
   return col ? [{ inputName: "tooltipContent", selectedSource: col.spec }] : [];
 });
+
+// The score's error fades the cell through opacity: a large error draws faint, a small one solid.
+// The error and the nucleotide-variant count behind it are also in the tooltip, where a cell with
+// no error of its own reads as NA.
+const errorOptions = computed((): PredefinedGraphOption<"heatmap">[] => {
+  const panel = activePanel.value;
+  const options: PredefinedGraphOption<"heatmap">[] = [];
+  if (panel?.errorSpec) {
+    options.push({ inputName: "opacity", selectedSource: panel.errorSpec });
+    options.push({ inputName: "tooltipContent", selectedSource: panel.errorSpec });
+  }
+  if (panel?.ntVariantsSpec) {
+    options.push({ inputName: "tooltipContent", selectedSource: panel.ntVariantsSpec });
+  }
+  return options;
+});
+
+// Explains the fade, only on a map that has one.
+const errorNoticeOpen = useErrorNotice(() => activePanel.value?.key);
+const showErrorNotice = computed(
+  () => activePanel.value?.errorSpec !== undefined && errorNoticeOpen.value,
+);
 
 // --- Browsing into a substitution ---
 //
@@ -240,6 +263,7 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
     ...aaPropertyOptions(app.model.outputs.singleMutantHeatmapPCols),
     { inputName: "tooltipContent", selectedSource: axes[1] }, // show State in the tooltip
     ...coOccurrenceOption.value,
+    ...errorOptions.value,
     ...regionOption.value,
   ];
 
@@ -341,8 +365,11 @@ const CLICK_HINT = "Click a cell to browse variants carrying that substitution";
   <!-- Floated over the chart, not stacked above it: the same fixed bottom-right corner and the
        same component graph-maker uses for its own truncation and export warnings, so the block
        does not invent a second notification style. A full-width banner also displaced the plot. -->
-  <div v-if="clickNotice" :class="$style.alerts">
-    <PlNotificationAlert v-model="noticeOpen" type="warning" closable>
+  <div v-if="clickNotice || showErrorNotice" :class="$style.alerts">
+    <PlNotificationAlert v-if="showErrorNotice" v-model="errorNoticeOpen" closable>
+      {{ ERROR_NOTICE }}
+    </PlNotificationAlert>
+    <PlNotificationAlert v-if="clickNotice" v-model="noticeOpen" type="warning" closable>
       {{ clickNotice }}
     </PlNotificationAlert>
   </div>

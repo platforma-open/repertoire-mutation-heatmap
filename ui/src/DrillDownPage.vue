@@ -6,17 +6,21 @@ import {
   PlAgDataTableV2,
   PlBlockPage,
   PlBtnGhost,
+  PlNotificationAlert,
   PlTabs,
   usePlDataTableSettingsV2,
 } from "@platforma-sdk/ui-vue";
 import { computed, watch } from "vue";
 import {
   drillDownLabel,
+  PAIR_ERROR,
+  PAIR_NT_VARIANTS,
   scoreLabelsByKey,
 } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import { aaPropertyOptions } from "./aaPropertyOptions";
 import { useApp } from "./app";
 import { useDrillDowns } from "./drillDown";
+import { ERROR_NOTICE, useErrorNotice } from "./errorNotice";
 
 const app = useApp<`/drilldown?m=${string}`>();
 const { close, leave } = useDrillDowns();
@@ -149,6 +153,15 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
   const variant = companion("pl7.app/repertoire/pairVariantKey");
   if (variant) options.push({ inputName: "tooltipContent", selectedSource: variant.spec });
 
+  // The pair's error fades it, as on the landscape, and sits in the tooltip with its variant count.
+  const error = companion(PAIR_ERROR);
+  if (error) {
+    options.push({ inputName: "opacity", selectedSource: error.spec });
+    options.push({ inputName: "tooltipContent", selectedSource: error.spec });
+  }
+  const ntVariants = companion(PAIR_NT_VARIANTS);
+  if (ntVariants) options.push({ inputName: "tooltipContent", selectedSource: ntVariants.spec });
+
   const regionCol = pCols.value?.find((p) => p.spec.name === "pl7.app/repertoire/regionAnnotation");
   if (regionCol) options.push({ inputName: "annotationsX", selectedSource: regionCol.spec });
 
@@ -166,6 +179,15 @@ const defaultOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefin
 
   return options;
 });
+
+// Same notice as the landscape, on the heatmap tab of a score that has an error.
+const errorNoticeOpen = useErrorNotice(() => drillDown.value?.scoreKey);
+const showErrorNotice = computed(
+  () =>
+    drillDown.value?.tab === "heatmap" &&
+    companion(PAIR_ERROR) !== undefined &&
+    errorNoticeOpen.value,
+);
 
 // Pin the map to this substitution. Through `fixedOptions`, not `defaultOptions`: those are
 // hidden from every picker (their sources go to calculateOptions as fixedIds), never written
@@ -238,6 +260,12 @@ const fixedOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefined
         noPframe: { title: 'Run the block to browse variants' },
       }"
     />
+
+    <div v-if="showErrorNotice" :class="$style.alerts">
+      <PlNotificationAlert v-model="errorNoticeOpen" closable>
+        {{ ERROR_NOTICE }}
+      </PlNotificationAlert>
+    </div>
   </PlBlockPage>
 </template>
 
@@ -250,5 +278,14 @@ const fixedOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefined
   margin-left: 24px;
   /* Pulls the group 10px further right, so the close cross sits where the page edge expects it. */
   margin-right: -10px;
+}
+
+/* Matches the landscape page's notice corner. */
+.alerts {
+  position: fixed;
+  bottom: 12px;
+  right: 12px;
+  z-index: 1;
+  width: 256px;
 }
 </style>

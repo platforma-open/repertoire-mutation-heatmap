@@ -23,3 +23,15 @@ export const LANDSCAPE_SCORE_INDEX = "pl7.app/repertoire/landscapeScoreIndex";
 export const MUTATION_ID_AXIS = "pl7.app/repertoire/mutationId";
 export const MUTATION_VARIANT_LINK = "pl7.app/repertoire/mutationVariantLink";
 export const BROWSABLE_MUTATION = "pl7.app/repertoire/browsableMutation";
+
+// A score's error and nucleotide-variant count, on the same cells as its value and told apart from
+// other scores' by the same `landscapeScore` domain key.
+export const LANDSCAPE_ERROR = "pl7.app/repertoire/singleMutantError";
+export const LANDSCAPE_NT_VARIANTS = "pl7.app/repertoire/singleMutantNtVariants";
+export const PAIR_ERROR = "pl7.app/repertoire/pairMutantError";
+export const PAIR_NT_VARIANTS = "pl7.app/repertoire/pairMutantNtVariants";
+export const LANDSCAPE_SCORE_INDEX_DOMAIN = "pl7.app/repertoire/landscapeScore";
+
+// Annotations on a landscape value column naming the upstream companion columns.
+export const LANDSCAPE_ERROR_COLUMN = "pl7.app/repertoire/landscapeScoreErrorColumn";
+export const LANDSCAPE_NT_VARIANTS_COLUMN = "pl7.app/repertoire/landscapeScoreNtVariantsColumn";

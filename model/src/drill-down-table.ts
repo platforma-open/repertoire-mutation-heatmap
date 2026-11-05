@@ -1,6 +1,14 @@
 import type { ColumnVisibilityRule, PlDataTableModel, RenderCtx } from "@platforma-sdk/model";
 import { ColumnsCollection, DataColumn, createPlDataTableV3 } from "@platforma-sdk/model";
-import { MUTATION_ID_AXIS, MUTATION_VARIANT_LINK, VARIANT_KEY_AXIS } from "./specs";
+import {
+  LANDSCAPE_ERROR_COLUMN,
+  LANDSCAPE_NT_VARIANTS_COLUMN,
+  LANDSCAPE_SCORE_REF,
+  LANDSCAPE_VALUE,
+  MUTATION_ID_AXIS,
+  MUTATION_VARIANT_LINK,
+  VARIANT_KEY_AXIS,
+} from "./specs";
 import type { BlockArgs, BlockData } from "./types";
 import { dedupByLeafId, exactMatch, outputPColumns, poolSpecByRef } from "./render-utils";
 
@@ -104,16 +112,25 @@ export function drillDownTableModel(
       visibility: "default",
     },
   ];
-  if (activeScoreSpec !== undefined)
-    visibility.push({
-      match: {
-        name: exactMatch(activeScoreSpec.name),
-        domain: Object.fromEntries(
-          Object.entries(activeScoreSpec.domain ?? {}).map(([k, v]) => [k, exactMatch(v)]),
-        ),
-      },
-      visibility: "default",
-    });
+  if (activeScoreSpec !== undefined) {
+    const scoreDomain = Object.fromEntries(
+      Object.entries(activeScoreSpec.domain ?? {}).map(([k, v]) => [k, exactMatch(v)]),
+    );
+    // The score's error and variant count beside it. Their names are recorded on the landscape
+    // column the run produced for this score; they share the score's domain.
+    const landscapeCol = outputPColumns(ctx, "singleMutantHeatmapPf")?.find(
+      (c) =>
+        c.spec.name === LANDSCAPE_VALUE && c.spec.annotations?.[LANDSCAPE_SCORE_REF] === scoreKey,
+    );
+    const companionNames = [LANDSCAPE_ERROR_COLUMN, LANDSCAPE_NT_VARIANTS_COLUMN]
+      .map((key) => landscapeCol?.spec.annotations?.[key])
+      .filter((name): name is string => name !== undefined);
+    for (const name of [activeScoreSpec.name, ...companionNames])
+      visibility.push({
+        match: { name: exactMatch(name), domain: scoreDomain },
+        visibility: "default",
+      });
+  }
   // Catch-all, LAST — first matching rule wins. A bare `.*` is an unanchored regex, so it
   // matches every name; an empty selector is not used, since "matches nothing specified" is not
   // a documented shorthand for "matches everything".

@@ -5,22 +5,57 @@ packages:
   - test
   - ui
   - workflow
+allowBuilds:
+  '@milaboratories/pframes-rs-node': true
+  '@milaboratories/tengo-tester': false
+  cpu-features: false
+  esbuild: false
+  protobufjs: false
+  ssh2: false
 catalog:
-  "@platforma-sdk/model": 1.85.2
-  "@platforma-sdk/ui-vue": 1.85.2
-  "@milaboratories/graph-maker": 1.9.0
-  "@platforma-sdk/workflow-tengo": 6.16.0
+  "@platforma-sdk/model": 1.88.0
+  "@platforma-sdk/ui-vue": 1.88.0
+  "@milaboratories/graph-maker": 1.10.3
+  "@platforma-sdk/workflow-tengo": 6.20.0
   "@platforma-sdk/block-kind": 1.1.0
-  "@platforma-sdk/test": 1.85.2
-  "@platforma-sdk/block-tools": 2.16.15
-  "@platforma-sdk/tengo-builder": 4.1.11
-  "@platforma-sdk/package-builder": 3.16.1
-  "@milaboratories/ts-builder": 1.7.2
+  "@platforma-sdk/test": 1.88.2
+  "@platforma-sdk/block-tools": 2.17.5
+  "@platforma-sdk/tengo-builder": 4.1.17
+  "@platforma-sdk/package-builder": 3.16.3
+  "@milaboratories/ts-builder": 1.7.3
   "@milaboratories/ts-configs": 1.4.0
-  "@milaboratories/helpers": 1.14.5
+  "@milaboratories/helpers": 1.14.6
   typescript: ~5.9.3
-  turbo: ~2.8.11
+  turbo: ~2.11.10
   shx: ~0.4.0
   "@changesets/cli": ~2.29.8
   vitest: ~4.0.18
-  vue: 3.5.24
+  vue: 3.5.44
+minimumReleaseAgeExclude:
+  - "@milaboratories/columns-collection-driver@0.2.13"
+  - "@milaboratories/pf-driver@1.9.13"
+  - "@milaboratories/pf-spec-driver@1.5.13"
+  - "@milaboratories/pf-spec@1.0.13"
+  - "@milaboratories/pl-client@3.20.0"
+  - "@milaboratories/pl-crash-recorder@0.3.9"
+  - "@milaboratories/pl-deployments@3.0.25"
+  - "@milaboratories/pl-drivers@1.16.40"
+  - "@milaboratories/pl-errors@1.4.57"
+  - "@milaboratories/pl-middle-layer@1.76.1"
+  - "@milaboratories/pl-model-backend@1.4.42"
+  - "@milaboratories/pl-model-common@1.55.0"
+  - "@milaboratories/pl-model-middle-layer@1.35.0"
+  - "@milaboratories/pl-tree@1.16.9"
+  - "@milaboratories/ptabler-expression-js@1.2.47"
+  - "@milaboratories/uikit@2.17.0"
+  - "@platforma-open/milaboratories.software-ptabler.schema@1.15.31"
+  - "@platforma-sdk/block-tools@2.17.5"
+  - "@platforma-sdk/model@1.88.0"
+  - "@platforma-sdk/package-builder-lib@1.4.3"
+  - "@platforma-sdk/tengo-builder@4.1.17"
+  - "@platforma-sdk/test@1.88.2"
+  - "@platforma-sdk/ui-vue@1.88.0"
+  - "@platforma-sdk/workflow-tengo@6.20.0"
+  - "@milaboratories/*"
+  - "@platforma-sdk/*"
+  - "@platforma-open/*"

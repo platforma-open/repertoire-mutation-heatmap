@@ -11,6 +11,7 @@ import {
   makeLandscapeChartState,
   mapChartStates,
   withEmptyNAValue,
+  withErrorOpacityRange,
   withParentOnXAxis,
   withRegionColoursReseeded,
   withYAnnotationTitleAtBottom,
@@ -19,7 +20,10 @@ import { dedupByLeafId, exactMatch, outputPColumns, poolSpecByRef } from "./rend
 import { drillDownTableModel } from "./drill-down-table";
 import {
   BROWSABLE_MUTATION,
+  LANDSCAPE_ERROR,
+  LANDSCAPE_NT_VARIANTS,
   LANDSCAPE_SCORE_INDEX,
+  LANDSCAPE_SCORE_INDEX_DOMAIN,
   LANDSCAPE_SCORE_REF,
   LANDSCAPE_VALUE,
   PARENT_LINK,
@@ -34,15 +38,17 @@ import type {
   BlockDataV3,
   BlockDataV4,
   BlockDataV5,
+  BlockDataV6,
   LandscapePanel,
 } from "./types";
 
 // The model's public surface is the package root; the files are an internal split.
 export type * from "./types";
-export { PARENT_ID_AXIS } from "./specs";
+export { PAIR_ERROR, PAIR_NT_VARIANTS, PARENT_ID_AXIS } from "./specs";
 export {
   makeDrillDownChartState,
   makeLandscapeChartState,
+  withErrorOpacityRange,
   withParentOnXAxis,
   withRegionColoursReseeded,
   withYAnnotationTitleAtBottom,
@@ -96,11 +102,18 @@ export function landscapePanelsFrom(
     // Pre-per-score-charts run: no ref, so no state key. Such a project shows the empty state
     // until it is re-run.
     if (key === undefined) continue;
+    const scoreIndex = col.spec.domain?.[LANDSCAPE_SCORE_INDEX_DOMAIN];
+    const companion = (name: string) =>
+      pCols.find(
+        (c) => c.spec.name === name && c.spec.domain?.[LANDSCAPE_SCORE_INDEX_DOMAIN] === scoreIndex,
+      )?.spec;
     panels.push({
       key,
       label: col.spec.annotations?.["pl7.app/label"] ?? "Score",
       index: Number(col.spec.annotations?.[LANDSCAPE_SCORE_INDEX] ?? "0"),
       spec: col.spec,
+      errorSpec: companion(LANDSCAPE_ERROR),
+      ntVariantsSpec: companion(LANDSCAPE_NT_VARIANTS),
     });
   }
   panels.sort((a, b) => a.index - b.index);
@@ -228,10 +241,23 @@ const dataModel = new DataModelBuilder({ kind })
     ...mapChartStates(v4, withRegionColoursReseeded),
   }))
   // The Y-axis amino acid tracks: their titles go below the map, on every saved chart.
-  .migrate<BlockData>("v6", (v5) => ({
+  .migrate<BlockDataV6>("v6", (v5) => ({
     ...v5,
     ...mapChartStates(v5, withYAnnotationTitleAtBottom),
     drillDownChartState: withYAnnotationTitleAtBottom(v5.drillDownChartState),
+  }))
+  // The reversed error opacity, on the landscape and drill-down charts. Not the composition map:
+  // it has no error to fade by.
+  .migrate<BlockData>("v7", (v6) => ({
+    ...v6,
+    singleMutantHeatmapState: withErrorOpacityRange(v6.singleMutantHeatmapState),
+    singleMutantHeatmapStates: Object.fromEntries(
+      Object.entries(v6.singleMutantHeatmapStates).map(([key, state]) => [
+        key,
+        withErrorOpacityRange(state),
+      ]),
+    ),
+    drillDownChartState: withErrorOpacityRange(v6.drillDownChartState),
   }))
   .init(() => ({
     drillDowns: [],
