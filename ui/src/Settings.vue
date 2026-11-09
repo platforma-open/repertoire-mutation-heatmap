@@ -14,7 +14,6 @@ import {
 } from "@platforma-sdk/model";
 import { PARENT_ID_AXIS } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import {
-  PlAccordionSection,
   PlDatasetSelector,
   PlDropdown,
   PlDropdownMulti,
@@ -24,14 +23,6 @@ import { computed, ref, watch } from "vue";
 import { useApp } from "./app";
 
 const app = useApp();
-
-const compositionOpen = ref(false);
-
-// Human label for a selected round-frequency column, from the discovery options.
-function roundLabel(ref: SUniversalPColumnId): string {
-  const opts = app.model.outputs.roundFrequencyOptions ?? [];
-  return opts.find((o) => o.value === ref)?.label ?? String(ref);
-}
 
 // Human label for a selected score column, from the discovery options.
 function scoreLabel(ref: SUniversalPColumnId): string {
@@ -76,11 +67,7 @@ function dropSubsetPicks() {
   const stamped = (opts?: { value: SUniversalPColumnId; subset?: string }[]) =>
     new Set((opts ?? []).filter((o) => o.subset !== undefined).map((o) => o.value));
   const scores = stamped(app.model.outputs.scoreOptions);
-  const rounds = stamped(app.model.outputs.roundFrequencyOptions);
   app.model.data.scoreRefs = app.model.data.scoreRefs.filter((r) => !scores.has(r));
-  app.model.data.roundFrequencyRefs = app.model.data.roundFrequencyRefs.filter(
-    (r) => !rounds.has(r),
-  );
 }
 
 function resetForDataset(ref: typeof app.model.data.stateMatrixRef) {
@@ -89,10 +76,9 @@ function resetForDataset(ref: typeof app.model.data.stateMatrixRef) {
   // args, so this holds the workflow (uncalculated) until the options watch auto-selects a
   // valid default — avoiding a run over a stale/mismatched selection.
   app.model.data.selectedParentId = undefined;
-  // Score and round ids are anchored on the previous dataset and resolve to nothing on the new
+  // Score ids are anchored on the previous dataset and resolve to nothing on the new
   // one; left in place they reach the workflow and fail it on a column with no spec.
   app.model.data.scoreRefs = [];
-  app.model.data.roundFrequencyRefs = [];
   // Open drill-downs name a substitution and score of the previous dataset. The prune in
   // useDrillDowns keeps them when the new run has no scores or reuses the parent id.
   app.model.data.drillDowns = [];
@@ -222,37 +208,6 @@ const parentOptionsDisplay = computed(() => {
       One chart per score, one tab each, in this order; drag to reorder. Each chart has its own
       colour scale, so scores measured in different units are fine.
     </div>
-
-    <!-- Composition-enrichment view: positional log2 fold change across selection rounds. -->
-    <PlAccordionSection v-model="compositionOpen" label="Enrichment Analysis">
-      <PlDropdownMulti
-        :model-value="app.model.data.roundFrequencyRefs"
-        :options="app.model.outputs.roundFrequencyOptions ?? []"
-        label="Round frequencies (from Enrichment)"
-        clearable
-        @update:model-value="(v: SUniversalPColumnId[]) => (app.model.data.roundFrequencyRefs = v)"
-      >
-        <template #tooltip>
-          Per-round, per-variant frequency columns exported by an upstream Enrichment block. Pick
-          the rounds to compare; the heatmap shows, per position and residue, the log2 fold change
-          of the residue composition in each round versus the baseline round. Adds the "Enrichment
-          Analysis" page.
-        </template>
-      </PlDropdownMulti>
-
-      <PlElementList
-        v-if="app.model.data.roundFrequencyRefs.length > 0"
-        v-model:items="app.model.data.roundFrequencyRefs"
-      >
-        <template #item-title="{ item }">{{ roundLabel(item) }}</template>
-      </PlElementList>
-      <div
-        v-if="app.model.data.roundFrequencyRefs.length > 0"
-        style="font-size: 12px; color: #888; margin-top: -8px"
-      >
-        The first round is the baseline (R0); drag to reorder.
-      </div>
-    </PlAccordionSection>
   </div>
 </template>
 

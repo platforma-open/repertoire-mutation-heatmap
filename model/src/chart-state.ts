@@ -36,7 +36,7 @@ export function makeLandscapeChartState(
         opacityRange: { ...ERROR_OPACITY_RANGE },
       },
     },
-    // Square cells, matching the enrichment map. No `facetColumns`: no facets left to lay out.
+    // Square cells. No `facetColumns`: no facets left to lay out.
     axesSettings: {
       axisX: {
         cellSize: 20,
@@ -235,17 +235,13 @@ export function withErrorOpacityRange(state: GraphMakerState): GraphMakerState {
 }
 
 /** Applies a rewrite to every chart state the block keeps. */
-type ChartStates = Pick<
-  BlockData,
-  "compositionHeatmapState" | "singleMutantHeatmapState" | "singleMutantHeatmapStates"
->;
+type ChartStates = Pick<BlockData, "singleMutantHeatmapState" | "singleMutantHeatmapStates">;
 
 export function mapChartStates(
   data: ChartStates,
   rewrite: (state: GraphMakerState) => GraphMakerState,
 ): ChartStates {
   return {
-    compositionHeatmapState: rewrite(data.compositionHeatmapState),
     singleMutantHeatmapState: rewrite(data.singleMutantHeatmapState),
     singleMutantHeatmapStates: Object.fromEntries(
       Object.entries(data.singleMutantHeatmapStates).map(([key, state]) => [key, rewrite(state)]),

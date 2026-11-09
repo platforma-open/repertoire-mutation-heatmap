@@ -1,9 +1,9 @@
 // Mutation Explorer — workflow.
 //
 // The profiler emits the per-variant state matrix [variantKey, parentId, position] -> state.
-// This block reads it, scopes everything to one parent, and precalculates two position ×
-// residue maps. Neither is a population marginal: no view here aggregates over the variants
-// carrying a residue. The aggregated state heat map that did was removed.
+// This block reads it, scopes everything to one parent, and precalculates the mutation-landscape
+// position × residue map. It is not a population marginal: no view here aggregates over the
+// variants carrying a residue. The aggregated state heat map that did was removed.
 //
 // Mutation landscape. Per-variant score columns plotted over the single-mutant subset only, so
 // a cell is one variant's own value rather than a summary over every genetic background the
@@ -11,11 +11,7 @@
 // [position, state] -> cellValue, scoped to the one selected parent. Present only when score
 // columns are selected.
 //
-// Enrichment analysis. Per-position, per-residue log2 fold change of residue composition in
-// each selection round against the baseline round. Output:
-// [round, parentId, position, state] -> log2fc. Needs at least two rounds.
-//
-// Both maps ride alongside two position-keyed annotation tracks — region membership and the
+// The map rides alongside two position-keyed annotation tracks — region membership and the
 // parent residue — which GraphMaker renders under the X axis. For amino acids, a state-keyed
 // property track groups and orders the residue rows on the Y axis.
 
@@ -141,9 +137,8 @@ wf.prepare(func(args) {
 		name: "pl7.app/label",
 		axes: [{ anchor: "main", idx: 0 }]
 	}, "variantLabel")
-	// Per-variant score columns for the mutation landscape. Same shape as the round
-	// frequencies: ids come from the model's discover() (anchored on `main`), added without a
-	// query key and retrieved by the ref itself in the body.
+	// Per-variant score columns for the mutation landscape. Ids come from the model's discover()
+	// (anchored on `main`), added without a query key and retrieved by the ref itself in the body.
 	if !is_undefined(args.scoreRefs) {
 		for ref in args.scoreRefs {
 			bb.addSingle(ref)
@@ -162,15 +157,6 @@ wf.prepare(func(args) {
 					}, "companion/" + companionName)
 				}
 			}
-		}
-	}
-	// Per-round frequency columns from the enrichment block (composition-enrichment view).
-	// Anchored on `main` like the scores: these are keyed on variantKey alone, which the state
-	// matrix carries. Ids come from the model's discover() and are added without a query key,
-	// retrieved by the ref itself in the body.
-	if !is_undefined(args.roundFrequencyRefs) && len(args.roundFrequencyRefs) >= 2 {
-		for ref in args.roundFrequencyRefs {
-			bb.addSingle(ref)
 		}
 	}
 	// Optional subset column picked alongside the state matrix (PlDatasetSelector)
@@ -242,21 +228,18 @@ wf.body(func(args) {
 	stateCol := columns.getColumn(args.stateMatrixRef)
 
 	// A pick computed on another subset would pass its values off as this run's. The pickers hide
-	// these; this catches a stale pick. Rounds join the bundle only from two on.
-	pickedRefs := is_undefined(args.scoreRefs) ? [] : copy(args.scoreRefs)
-	if !is_undefined(args.roundFrequencyRefs) && len(args.roundFrequencyRefs) >= 2 {
-		pickedRefs = append(pickedRefs, args.roundFrequencyRefs...)
-	}
-	for ref in pickedRefs {
-		domain := columns.getSpec(ref).domain
-		stamp := is_undefined(domain) ? undefined : domain["pl7.app/inputSubset"]
-		if !is_undefined(stamp) && stamp != args.inputFilter {
-			ll.panic("A picked score or round frequency was computed on a different subset. Pick it again in Settings.")
+	// these; this catches a stale pick.
+	if !is_undefined(args.scoreRefs) {
+		for ref in args.scoreRefs {
+			domain := columns.getSpec(ref).domain
+			stamp := is_undefined(domain) ? undefined : domain["pl7.app/inputSubset"]
+			if !is_undefined(stamp) && stamp != args.inputFilter {
+				ll.panic("A picked score was computed on a different subset. Pick it again in Settings.")
+			}
 		}
 	}
 
 	// State-matrix axes, in emitted order [variantKey, parentId, position].
-	parentAxisSpec := stateSpec.axesSpec[1]
 	alphabet := stateSpec.axesSpec[2].domain["pl7.app/alphabet"]
 	// X-axis (position) label: override the profiler's inherited "Position aa"/"Position nt"
 	// with upper-cased "Position AA"/"Position NT" for the heat map plots. Label is an
@@ -372,9 +355,9 @@ wf.body(func(args) {
 		smInput = pt.p.inner(smInput, pt.p.column("subsetFilter", filterColumn))
 	}
 	// Scope the whole plot to one parent. Everything downstream derives from smDf (heat map
-	// cells, the parent-residue track, composition), so a single filter here makes them all
-	// single-parent — which is what the position-keyed annotation tracks require. The region
-	// track has its own source (bundle column) and is filtered separately below.
+	// cells, the parent-residue track), so a single filter here makes them all single-parent —
+	// which is what the position-keyed annotation tracks require. The region track has its own
+	// source (bundle column) and is filtered separately below.
 	stateFrame := func(input) {
 		df := ptWf.frame(input).select(
 			pt.axis(VARIANT_KEY_AXIS).alias("variantKey"),
@@ -1023,111 +1006,6 @@ wf.body(func(args) {
 		}
 	}
 
-	// --- Composition-enrichment precalc (optional) ---
-	// Positional composition shift across rounds: log2(round fraction / baseline fraction),
-	// on the per-position composition frequency (A-0019). Consumes the enrichment block's
-	// per-round per-variant frequency columns. Round identity comes from each column's
-	// `pl7.app/enrichment/condition` domain; round order (baseline = first) from the args
-	// array. Frequencies are fractions, so zeros are guarded by a small epsilon, not a
-	// count pseudocount.
-	// Need at least two rounds: one baseline plus one comparison. With a single round the
-	// baseline is filtered out below, leaving an empty result — so gate it out entirely.
-	roundRefs := args.roundFrequencyRefs
-	hasComposition := !is_undefined(roundRefs) && len(roundRefs) >= 2
-	if hasComposition {
-		eps := args.compositionEpsilon
-
-		// Long per-round frequency frame [variantKey, round, freq].
-		roundFrames := []
-		baselineRound := undefined
-		for i, ref in roundRefs {
-			rSpec := columns.getSpec(ref)
-			roundId := string(i)
-			if !is_undefined(rSpec) && !is_undefined(rSpec.domain) && !is_undefined(rSpec.domain["pl7.app/enrichment/condition"]) {
-				roundId = rSpec.domain["pl7.app/enrichment/condition"]
-			}
-			// GraphMaker orders facets by the round axis label (numeric-collation sort), with
-			// no facet-order override — so the label must lead with the arrangement index for
-			// the panels to render in the user's chosen order. Skip the prefix when the round
-			// name is already that ordinal index (avoids a redundant "1. 1"); the bare name is
-			// then just the index, so ordering still holds.
-			roundKey := roundId
-			if roundId != string(i) {
-				roundKey = string(i) + ". " + roundId
-			}
-			if is_undefined(baselineRound) {
-				baselineRound = roundKey
-			}
-			// Header carries the loop index — one frame per round in the same workflow.
-			rHeader := "freq_" + string(i)
-			rDf := ptWf.frame(pt.p.column(rHeader, columns.getColumn(ref))).
-				select(
-					pt.axis(VARIANT_KEY_AXIS).alias("variantKey"),
-					pt.col(rHeader).alias("freq")
-				).
-				withColumns(pt.lit(roundKey).alias("round"))
-			roundFrames = roundFrames + [rDf]
-		}
-		freqDf := roundFrames[0]
-		if len(roundFrames) > 1 {
-			freqDf = pt.concat(roundFrames)
-		}
-
-		// Composition fraction per (round, parentId, position, state): the per-round
-		// frequency scattered onto positions via the state matrix, summed per residue,
-		// then normalized per (round, parentId, position) column (A-0011).
-		compFrac := smDf.join(freqDf, { on: "variantKey", how: "inner" }).
-			groupBy("round", "parentId", "position", "state").
-			agg(pt.col("freq").sum().alias("posSum")).
-			withColumns(
-				pt.col("posSum").
-					truediv(pt.col("posSum").sum().over(["round", "parentId", "position"])).
-					alias("frac")
-			).
-			select(pt.col("round"), pt.col("parentId"), pt.col("position"), pt.col("state"), pt.col("frac"))
-
-		// Full (round × cell) grid, zero-filled, so residues absent in a round or the
-		// baseline still appear (emergence / depletion) rather than dropping out.
-		cells := compFrac.select(pt.col("parentId"), pt.col("position"), pt.col("state")).unique()
-		roundsU := compFrac.select(pt.col("round")).unique()
-		gridDf := roundsU.join(cells, { how: "cross" }).
-			join(compFrac, { on: ["round", "parentId", "position", "state"], how: "left" }).
-			withColumns(pt.col("frac").fillNull(pt.lit(0)).alias("frac"))
-
-		// Baseline fractions keyed by cell; zero where the baseline lacks the residue.
-		baseFrac := compFrac.filter(pt.col("round").eq(pt.lit(baselineRound))).
-			select(pt.col("parentId"), pt.col("position"), pt.col("state"), pt.col("frac").alias("baseFrac"))
-
-		// Drop the baseline round's own panel — it is log2(f/f)=0 everywhere by construction
-		// and carries no signal. Panels shown = one per non-baseline round.
-		compDf := gridDf.join(baseFrac, { on: ["parentId", "position", "state"], how: "left" }).
-			withColumns(pt.col("baseFrac").fillNull(pt.lit(0)).alias("baseFrac")).
-			withColumns(
-				pt.col("frac").plus(pt.lit(eps)).
-					truediv(pt.col("baseFrac").plus(pt.lit(eps))).
-					log2().
-					alias("log2fc")
-			).
-			filter(pt.col("round").neq(pt.lit(baselineRound))).
-			select(pt.col("round"), pt.col("parentId"), pt.col("position"), pt.col("state"), pt.col("log2fc"))
-
-		compDf.save("compositionHeatmap.tsv")
-
-		// Per-cell flag marking the parent residue at each position, for GraphMaker's Highlight
-		// input: the cell whose state IS the parent is outlined, the rest are not. Keyed
-		// [parentId, position, state] — a subset of the composition cell's axes, so every round
-		// gets the same marking from one column.
-		//
-		// A SUBSET column: only the parent cells are present, and a cell absent from it reads as
-		// null after the join, which is what `pl7.app/isSubset` tells GraphMaker to filter on.
-		// The same grid the cells come from, so a marked cell always has a cell to mark.
-		parentFlagDf := cells.join(parentResDf, { on: "position", how: "inner" }).
-			filter(pt.col("state").eq(pt.col("parentResidue"))).
-			withColumns(pt.lit(1).alias("isParentResidue")).
-			select(pt.col("parentId"), pt.col("position"), pt.col("state"), pt.col("isParentResidue"))
-		parentFlagDf.save("parentResidueFlag.tsv")
-	}
-
 	ptResult := ptWf.run()
 
 	trace := pSpec.makeTrace(traceSpec, {
@@ -1138,7 +1016,7 @@ wf.body(func(args) {
 
 	// Region annotation track: [position] -> region, keyed on the same position axis as the
 	// value columns, so GraphMaker aligns it under the X axis. String value → discrete
-	// annotation. Added to both the landscape and composition frames; the UI presets it as an
+	// annotation. Added to the landscape and drill-down frames; the UI presets it as an
 	// annotationsX track on each page.
 	regionCols := undefined
 	if hasRegion {
@@ -1705,139 +1583,6 @@ wf.body(func(args) {
 			browsablePf.add("browsable/" + k, trace.inject(v.spec), v.data)
 		}
 		outputs.browsableMutationsPf = pframes.exportFrame(browsablePf.build())
-	}
-
-	// --- Composition heat map import + export (optional) ---
-	// [round, parentId, position, state] -> log2FC. parentId / position inherited from the
-	// profiler; round and state are block-local. The value is signed → tagged for the
-	// diverging colour scale (A-0017) via a block-owned annotation the UI reads.
-	if hasComposition {
-		compCols := xsv.importFile(
-			ptResult.getFile("compositionHeatmap.tsv"),
-			"tsv",
-			{
-				axes: [
-					{
-						column: "round",
-						spec: {
-							name: "pl7.app/repertoire/round",
-							type: "String",
-							annotations: {
-								"pl7.app/label": "Round"
-							}
-						}
-					},
-					{ column: "parentId", spec: parentAxisSpec },
-					{ column: "position", spec: positionAxisSpec },
-					{
-						column: "state",
-						spec: {
-							name: "pl7.app/repertoire/state",
-							type: "String",
-							domain: {
-								"pl7.app/alphabet": alphabet
-							},
-							annotations: {
-								"pl7.app/label": stateAxisLabel,
-								"pl7.app/table/fontFamily": "monospace"
-							}
-						}
-					}
-				],
-				columns: [{
-					column: "log2fc",
-					spec: {
-						name: "pl7.app/repertoire/compositionLog2FC",
-						valueType: "Double",
-						domain: {
-							"pl7.app/alphabet": alphabet
-						},
-						annotations: {
-							"pl7.app/label": "Composition log2 fold change",
-							"pl7.app/isScore": "true",
-							"pl7.app/heatmap/colorScale": "diverging"
-						}
-					}
-				}],
-				storageFormat: "Parquet",
-				partitionKeyLength: 0
-			},
-			{ splitDataAndSpec: true }
-		)
-		// Parent-residue marking, [parentId, position, state] -> 1 for the parent cell only.
-		// Absent everywhere else, so the Highlight input's subset filter outlines exactly those
-		// cells. Shares parentId / position / state with the value column, so GraphMaker accepts
-		// it as a per-cell source.
-		parentFlagCols := xsv.importFile(
-			ptResult.getFile("parentResidueFlag.tsv"),
-			"tsv",
-			{
-				axes: [
-					{ column: "parentId", spec: parentAxisSpec },
-					{ column: "position", spec: positionAxisSpec },
-					{
-						column: "state",
-						spec: {
-							name: "pl7.app/repertoire/state",
-							type: "String",
-							domain: {
-								"pl7.app/alphabet": alphabet
-							},
-							annotations: {
-								"pl7.app/label": stateAxisLabel,
-								"pl7.app/table/fontFamily": "monospace"
-							}
-						}
-					}
-				],
-				columns: [{
-					column: "isParentResidue",
-					spec: {
-						name: "pl7.app/repertoire/isParentResidue",
-						valueType: "Int",
-						domain: {
-							"pl7.app/alphabet": alphabet
-						},
-						annotations: {
-							"pl7.app/label": (alphabet == "aminoacid") ? "Is parent AA" : "Is parent NT",
-							// Present-or-absent, not a number: GraphMaker's Highlight input then
-							// defaults to the subset filter instead of asking for a range.
-							"pl7.app/isSubset": "true"
-						}
-					}
-				}],
-				storageFormat: "Parquet",
-				partitionKeyLength: 0
-			},
-			{ splitDataAndSpec: true }
-		)
-
-		compPf := pframes.pFrameBuilder()
-		for k, v in compCols {
-			compPf.add(k, trace.inject(v.spec), v.data)
-		}
-		for k, v in parentFlagCols {
-			compPf.add("parentFlag/" + k, trace.inject(v.spec), v.data)
-		}
-		// Same position-keyed region + parent-residue tracks as the state heat map — the
-		// composition plot shares the position (X) axis and the selected parent, so they align.
-		if hasRegion {
-			for k, v in regionCols {
-				compPf.add("region/" + k, trace.inject(v.spec), v.data)
-			}
-		}
-		for k, v in parentCols {
-			compPf.add("parent/" + k, trace.inject(v.spec), v.data)
-		}
-		if hasAaProperties {
-			for k, v in aaPropertyCols {
-				compPf.add("aaProperty/" + k, trace.inject(v.spec), v.data)
-			}
-			for k, v in aaHydropathyCols {
-				compPf.add("aaHydropathy/" + k, trace.inject(v.spec), v.data)
-			}
-		}
-		outputs.compositionHeatmapPf = pframes.exportFrame(compPf.build())
 	}
 
 	return {

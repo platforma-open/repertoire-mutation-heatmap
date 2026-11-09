@@ -227,8 +227,9 @@ export function scoreLabelsByKey(
  * Shared by the `scoreOptions` output and by section / panel naming, so a score's page is named by
  * the same label the user picked it under, and the two cannot drift.
  *
- * Discovered via discover() (not getCanonicalOptions — see roundFrequencyOptions for why) anchored
- * on the state matrix. The anchor name `main` must match the workflow's `bb.addAnchor(...)`.
+ * Discovered via discover() anchored on the state matrix, not getCanonicalOptions: a canonical id
+ * bakes in a column's nested-escaped-JSON domains, which fail to round-trip in the workflow's
+ * anchored query. The anchor name `main` must match the workflow's `bb.addAnchor(...)`.
  *
  * Numeric only — a cell holds one variant's score. NOT restricted to `pl7.app/isScore`: no shipped
  * block emits a variant-keyed column carrying that annotation yet (repertoire-score is
@@ -261,7 +262,7 @@ function computeScoreOptions(
   // Dedup by leaf id, not by name + domain: a sibling block's score column shares the name, and
   // the producing block's identity sits in contextDomain, not domain, so a name + domain key
   // collides and drops it. The leaf id collapses only the same storage column reached by several
-  // paths. Same approach as roundFrequencyOptions.
+  // paths.
   const entries = dedupByLeafId(
     columns.filter((recipe) => isLandscapeScoreColumn(recipe.getSpec(), variantAxisName)),
   ).map((recipe) => ({ id: recipe.id, spec: recipe.getSpec() }));
@@ -318,8 +319,7 @@ const dataModel = new DataModelBuilder({ kind })
     ...mapChartStates(v5, withYAnnotationTitleAtBottom),
     drillDownChartState: withYAnnotationTitleAtBottom(v5.drillDownChartState),
   }))
-  // The reversed error opacity, on the landscape and drill-down charts. Not the composition map:
-  // it has no error to fade by.
+  // The reversed error opacity, on the landscape and drill-down charts.
   .migrate<BlockData>("v7", (v6) => ({
     ...v6,
     singleMutantHeatmapState: withErrorOpacityRange(v6.singleMutantHeatmapState),
@@ -335,50 +335,11 @@ const dataModel = new DataModelBuilder({ kind })
     drillDowns: [],
     drillDownChartState: makeDrillDownChartState(),
     drillDownTableState: createPlDataTableStateV2(),
-    roundFrequencyRefs: [],
-    compositionEpsilon: 1e-6,
     scoreRefs: [],
     // The landing page opens with the Settings drawer out: a fresh block has nothing to plot,
     // and Settings is the first thing the user needs. The page closes it when a run starts.
     singleMutantHeatmapState: makeLandscapeChartState("Single Mutation Landscape", "settings"),
     singleMutantHeatmapStates: {},
-    compositionHeatmapState: {
-      title: "Enrichment Analysis",
-      template: "heatmap",
-      currentTab: null,
-      // Value is log2 fold change (signed); the diverging palette is applied via the
-      // GraphMaker `defaultPalette` prop on the page. Disable GraphMaker's own row
-      // normalization and transform so the linear log2FC is shown as-is.
-      layersSettings: {
-        heatmap: {
-          normalizationDirection: null,
-          transform: null,
-        },
-      },
-      // Square cells on the position axis, matching the enrichment map.
-      axesSettings: {
-        // One facet per row. The pinned cellSize below lays the cell grid out at its natural
-        // size across the whole position range, but graph-maker's default facet grid is 3
-        // columns, so each panel frame gets a third of the width. The two disagree and the grid
-        // spills across and past the frames. Stacking the facets gives every panel the full
-        // width, so the pin and the frame agree, and panels line up position-for-position —
-        // which is the point of comparing them. The chart grows downward and scrolls, the same
-        // trade already taken on Y.
-        other: {
-          facetColumns: 1,
-        },
-        axisX: {
-          cellSize: 20,
-          // Two-part labels ("32, D": position, then the residue it started as).
-          axisLabelsAngle: 45,
-        },
-        axisY: {
-          hideAxisLabels: false,
-          cellSize: 20,
-          annotationTitlePosition: "bottom",
-        },
-      },
-    },
   }));
 
 export const platforma = BlockModelV3.create({ dataModel, kind })
@@ -400,9 +361,6 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
         inputFilter: createGlobalPObjectId(data.filterRef.blockId, data.filterRef.name),
       }),
       selectedParentId: data.selectedParentId,
-      // Order is meaningful (baseline first) — pass through verbatim, do not sort.
-      roundFrequencyRefs: data.roundFrequencyRefs ?? [],
-      compositionEpsilon: data.compositionEpsilon ?? 1e-6,
       // Order is the facet order the user arranged — pass through verbatim, do not sort.
       scoreRefs: data.scoreRefs ?? [],
     };
@@ -452,46 +410,6 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
 
   // Per-variant numeric score columns for the mutation landscape. See computeScoreOptions.
   .output("scoreOptions", (ctx) => computeScoreOptions(ctx))
-
-  // Per-round frequency columns from the enrichment block (composition-enrichment view).
-  // Each round is one `pl7.app/frequency` column carrying its round identity in domain
-  // `pl7.app/enrichment/condition`. The user orders the chosen rounds in the UI
-  // (baseline = first); the workflow reads each round's identity from that domain.
-  //
-  // Discovered via ColumnsCollection.discover anchored on the STATE MATRIX, the same anchor the
-  // score columns use. These columns are keyed on `pl7.app/variantKey` alone — the round lives in
-  // the domain, not on an axis — and the state matrix carries that axis at idx 0, so it anchors
-  // them directly. `discover` resolves via the spec frame, unlike
-  // `getCanonicalOptions` — whose id bakes in the enrichment column's nested-escaped-JSON domains
-  // (conditionsOrder / filteringConfig), which fail to round-trip in the workflow's anchored
-  // query. The anchor name `main` must match the workflow's `bb.addAnchor("main", ...)`; the
-  // discovered `column.id` resolves against it there.
-  //
-  // v1: variant-level only (maxHops 0). Cluster-keyed frequencies (enrichment on clustered
-  // abundance) need linker traversal (maxHops > 0) + adding the `variant→cluster` linker in
-  // the workflow (A-0016) — deferred, shared with the property-view cluster path.
-  .output("roundFrequencyOptions", (ctx) => {
-    const stateMatrixRef = ctx.data.stateMatrixRef;
-    if (stateMatrixRef === undefined) return undefined;
-    const stateSpec = poolSpecByRef(ctx, stateMatrixRef);
-    if (!stateSpec) return undefined;
-
-    const matches = dedupByLeafId(
-      ColumnsCollection(["result_pool"])
-        .discover({
-          include: { name: exactMatch("pl7.app/frequency") },
-          anchors: { main: stateSpec },
-          mode: "enrichment",
-          maxHops: 0,
-        })
-        .getColumns(),
-    );
-
-    return runColumnOptions(
-      matches.map((recipe) => ({ id: recipe.id, spec: recipe.getSpec() })),
-      inputFilterOf(ctx.data),
-    );
-  })
 
   // The variant -> parent linker and the subset column in one frame, so the UI can offer only
   // parents the subset reaches. Undefined without a subset or when the dataset has no linker.
@@ -605,18 +523,6 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
   // explaining than it needs code.
   .outputWithStatus("drillDownTable", (ctx) => drillDownTableModel(ctx))
 
-  // Composition-enrichment heat map: per-round positional log2 fold change
-  // `[round, parentId, position, state] -> log2FC`. Present only when round-frequency
-  // inputs are selected (the workflow emits it conditionally).
-  .outputWithStatus("compositionHeatmapPf", (ctx): PFrameHandle | undefined => {
-    const pCols = outputPColumns(ctx, "compositionHeatmapPf");
-    if (pCols === undefined) return undefined;
-    return createPFrameForGraphs(ctx, pCols);
-  })
-  .output("compositionHeatmapPCols", (ctx) => {
-    return outputPColumns(ctx, "compositionHeatmapPf");
-  })
-
   .output("isRunning", (ctx) => ctx.outputs?.getIsReadyOrError() === false)
 
   .title(() => "Mutation Explorer")
@@ -669,11 +575,6 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
       }
     }
 
-    // Needs a baseline + at least one comparison round (see workflow's hasComposition).
-    if (ctx.data.roundFrequencyRefs.length >= 2) {
-      sections.push({ type: "delimiter" });
-      sections.push({ type: "link", href: "/composition", label: "Enrichment Analysis" });
-    }
     return sections;
   })
 
