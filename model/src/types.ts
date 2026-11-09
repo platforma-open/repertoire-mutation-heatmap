@@ -56,18 +56,6 @@ export type BlockArgs = {
    *  (the UI auto-selects the first parent), so the workflow only ever runs single-parent. */
   selectedParentId: string;
   /**
-   * Ordered per-round frequency columns from the enrichment block (composition-enrichment view).
-   * Each is one round's `[variantKey] -> frequency` (`pl7.app/frequency`); `[0]` is the baseline round R0.
-   * Empty = composition-enrichment view off.
-   */
-  roundFrequencyRefs: SUniversalPColumnId[];
-  /**
-   * Fraction-space epsilon added to both sides of the composition ratio before log2,
-   * to keep emergent/vanished residues finite. Frequencies are in [0,1] (not counts),
-   * so this is a small value (default 1e-6), not a count pseudocount.
-   */
-  compositionEpsilon: number;
-  /**
    * Per-variant score columns plotted in the mutation landscape, in the user's chosen
    * order (which becomes the facet order). Empty = landscape off.
    */
@@ -76,7 +64,6 @@ export type BlockArgs = {
 
 /** UI view state kept out of the workflow args. */
 export type BlockUiState = {
-  compositionHeatmapState: GraphMakerState;
   /**
    * Placeholder landscape chart, shown while no score column has produced data. Carries the
    * page's empty state and its Settings drawer — on a fresh block, the only way into Settings.
@@ -158,10 +145,6 @@ export type BlockData = {
   filterRef?: PlRef;
   /** Parent the plot is scoped to (UI auto-selects the first available on load). */
   selectedParentId?: string;
-  /** Ordered per-round frequency columns; `[0]` = baseline R0. Empty = composition view off. */
-  roundFrequencyRefs: SUniversalPColumnId[];
-  /** Fraction-space epsilon for the composition ratio (default 1e-6). */
-  compositionEpsilon: number;
   /** Ordered per-variant score columns for the mutation landscape. Empty = no map rendered. */
   scoreRefs: SUniversalPColumnId[];
 } & BlockUiState;

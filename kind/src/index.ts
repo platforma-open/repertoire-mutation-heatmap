@@ -6,18 +6,16 @@ import { name, version } from "../package.json" with { type: "json" };
  * at creation, and exactly what a project template serializes for it.
  *
  * Deliberately empty. Every input this block needs is a result-pool reference
- * the user picks after creation: the profiler state matrix, the abundance and
- * known-abundance columns, the per-round frequency columns and the per-variant
+ * the user picks after creation: the profiler state matrix and the per-variant
  * score columns. A template cannot name any of them, because a reference only
  * exists once the upstream block has run.
  *
  * The scalar knobs are the natural first params once the `DataModelBuilder` /
  * `BlockModelV3.create` wiring for kinds lands: `level` (aminoacid vs
- * nucleotide), `valueMode` (abundance vs property), `normalize`, and
- * `compositionEpsilon`. All four are plain enumerated or numeric values a
- * template could reasonably pin, and all four already carry defaults in the
- * model's `init()`. Adding an optional field to this contract later is
- * backwards compatible, so starting empty costs nothing.
+ * nucleotide), `valueMode` (abundance vs property) and `normalize`. These are
+ * plain enumerated values a template could reasonably pin, and they already
+ * carry defaults in the model's `init()`. Adding an optional field to this
+ * contract later is backwards compatible, so starting empty costs nothing.
  */
 export type BlockParams = Record<string, never>;
 
