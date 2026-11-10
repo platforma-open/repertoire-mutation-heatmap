@@ -76,6 +76,14 @@ SCORE_COMPANIONS := {
 	},
 	"pl7.app/enrichment/parentNormalized": {
 		"error": "pl7.app/enrichment/parentNormalizedUncertainty"
+	},
+	// Tite-Seq: both errors are standard errors in log10 units, as their scores are.
+	"pl7.app/vdj/kdNegLog10": {
+		"error": "pl7.app/vdj/kdLog10Se",
+		"ntVariants": "pl7.app/vdj/kdNtVariants"
+	},
+	"pl7.app/vdj/kdLog10ParentDelta": {
+		"error": "pl7.app/vdj/kdLog10ParentDeltaSe"
 	}
 }
 COMPANION_KINDS := ["error", "ntVariants"]
