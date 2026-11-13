@@ -1,5 +1,7 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.block
 
+## 1.5.1
+
 ## 1.5.0
 
 ### Minor Changes
