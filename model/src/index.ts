@@ -331,11 +331,17 @@ const dataModel = new DataModelBuilder({ kind })
     ),
     drillDownChartState: withErrorOpacityRange(v6.drillDownChartState),
   }))
-  .init(() => ({
+  // The first four fields are the kind's init-params contract, and `.templateParams(...)`
+  // below projects the same four back out. `params` is optional: a block may be created
+  // without a template.
+  .init(({ params }) => ({
+    stateMatrixRef: params?.stateMatrixRef,
+    filterRef: params?.filterRef,
+    selectedParentId: params?.selectedParentId,
+    scoreRefs: params?.scoreRefs ?? [],
     drillDowns: [],
     drillDownChartState: makeDrillDownChartState(),
     drillDownTableState: createPlDataTableStateV2(),
-    scoreRefs: [],
     // The landing page opens with the Settings drawer out: a fresh block has nothing to plot,
     // and Settings is the first thing the user needs. The page closes it when a run starts.
     singleMutantHeatmapState: makeLandscapeChartState("Single Mutation Landscape", "settings"),
@@ -366,15 +372,16 @@ export const platforma = BlockModelV3.create({ dataModel, kind })
     };
   })
 
-  // The inverse of the data model's `init`. The kind declares no params (see
-  // `kind/src/index.ts`), so there is nothing to project and a project exported as a
-  // template brings this block back default-initialized — the dataset and every setting
-  // are re-picked by hand. Widening this is a deliberate follow-up, not an oversight: the
-  // `PlRef` fields and the four scalar knobs are templatable, while the discovered
-  // `SUniversalPColumnId` selections (property, scores, round frequencies) are anchored
-  // against one project's upstream columns and the SDK promises template rewriting for
-  // `PlRef` only.
-  .templateParams(() => ({}))
+  // The inverse of the data model's `init`: the same four fields, so a project exported as a
+  // template and re-applied comes back with the dataset, the parent and the scores it went
+  // out with. The score ids name upstream blocks, as the two references do; applying a
+  // template points all of them at the blocks of the project being made.
+  .templateParams((data) => ({
+    stateMatrixRef: data.stateMatrixRef,
+    filterRef: data.filterRef,
+    selectedParentId: data.selectedParentId,
+    scoreRefs: data.scoreRefs,
+  }))
 
   // --- Input selection from the result pool ---
 

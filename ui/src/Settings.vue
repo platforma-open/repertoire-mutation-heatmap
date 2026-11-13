@@ -21,6 +21,7 @@ import {
 } from "@platforma-sdk/ui-vue";
 import { computed, ref, watch } from "vue";
 import { useApp } from "./app";
+import { datasetLabel } from "./datasetLabel";
 
 const app = useApp();
 
@@ -47,14 +48,7 @@ const stateMatrixSelection = computed<DatasetSelection | undefined>({
     if (!(ref && prev && plRefsEqual(ref, prev, true))) resetForDataset(ref);
     else if (!sameRef(filterRef, app.model.data.filterRef)) dropSubsetPicks();
     app.model.data.filterRef = filterRef;
-    // The subset's label when one is picked: it already carries the dataset as a prefix.
-    const option = ref
-      ? app.model.outputs.stateMatrixOptions?.find((o) => plRefsEqual(o.primary.ref, ref, true))
-      : undefined;
-    const filter = filterRef
-      ? option?.filters?.find((f) => plRefsEqual(f.ref, filterRef, true))
-      : undefined;
-    app.model.data.defaultBlockLabel = (filter ?? option?.primary)?.label ?? "";
+    app.model.data.defaultBlockLabel = (ref && datasetLabel(app.model, ref, filterRef)) ?? "";
   },
 });
 
