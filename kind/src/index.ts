@@ -1,37 +1,78 @@
 import { assertParamsObject, defineBlockKind } from "@platforma-sdk/block-kind";
+import type { PlRef, SUniversalPColumnId } from "@platforma-sdk/model";
+import { isPlRef } from "@platforma-sdk/model";
 import { name, version } from "../package.json" with { type: "json" };
 
 /**
  * This block's init-params contract — the shape a block of this kind receives
- * at creation, and exactly what a project template serializes for it.
+ * at creation, and exactly what a project template serializes for it: what the
+ * user picks in Settings.
  *
- * Deliberately empty. Every input this block needs is a result-pool reference
- * the user picks after creation: the profiler state matrix and the per-variant
- * score columns. A template cannot name any of them, because a reference only
- * exists once the upstream block has run.
+ * - `stateMatrixRef` — the dataset: the profiler's state matrix.
+ * - `filterRef` — the subset of it the plot is narrowed to, when one is picked.
+ * - `selectedParentId` — the parent the plot is scoped to, by its id in the dataset.
+ * - `scoreRefs` — the score columns of the landscape, in the order they are drawn.
  *
- * The scalar knobs are the natural first params once the `DataModelBuilder` /
- * `BlockModelV3.create` wiring for kinds lands: `level` (aminoacid vs
- * nucleotide), `valueMode` (abundance vs property) and `normalize`. These are
- * plain enumerated values a template could reasonably pin, and they already
- * carry defaults in the model's `init()`. Adding an optional field to this
- * contract later is backwards compatible, so starting empty costs nothing.
+ * The first two are references to columns of upstream blocks and the last holds
+ * column ids, which name upstream blocks too. A project template names its blocks,
+ * and a block created from one receives all of these pointing at the blocks made
+ * from the same entries, so a project made from a template plots what the original
+ * one did.
+ *
+ * Left out: the dataset's name kept for the subtitle, which the UI mirrors from
+ * the picker's options, the open drill-downs, and the chart and table view state.
+ *
+ * Every field is optional because the projection hands live state back untouched,
+ * and a block whose dataset is not picked yet holds `undefined` there. Requiring
+ * one would make the block export a file its own kind refuses to apply.
  */
-export type BlockParams = Record<string, never>;
+export type BlockParams = {
+  stateMatrixRef?: PlRef;
+  filterRef?: PlRef;
+  selectedParentId?: string;
+  scoreRefs?: SUniversalPColumnId[];
+};
 
 /**
  * The same contract at runtime, for params that arrive from a template file
  * rather than from typed code.
  *
- * The contract names no fields, so there is nothing to read and nothing to
- * validate beyond the value being an object at all. Keys a template supplies
- * anyway are dropped by not being read. The return type holds this in step: the
- * moment `BlockParams` declares a required field, `return {}` stops compiling.
+ * Each field the contract names is read and checked here; nothing else is. A key
+ * this function never reads is dropped rather than refused. The checks stop at
+ * the shape of a value: whether a reference or a column id names anything in the
+ * project is known only once its upstream blocks exist, and is settled there.
  */
 function parseInitializationParams(value: unknown): BlockParams {
   assertParamsObject(value);
 
-  return {};
+  const { stateMatrixRef, filterRef, selectedParentId, scoreRefs } = value;
+
+  if (stateMatrixRef !== undefined && !isPlRef(stateMatrixRef)) {
+    throw new Error(
+      "'stateMatrixRef' must be a reference to an upstream state matrix, written as { block, name }.",
+    );
+  }
+  if (filterRef !== undefined && !isPlRef(filterRef)) {
+    throw new Error(
+      "'filterRef' must be a reference to an upstream subset column, written as { block, name }.",
+    );
+  }
+  if (selectedParentId !== undefined && typeof selectedParentId !== "string") {
+    throw new Error("'selectedParentId' must be a string.");
+  }
+  if (
+    scoreRefs !== undefined &&
+    !(Array.isArray(scoreRefs) && scoreRefs.every((ref) => typeof ref === "string"))
+  ) {
+    throw new Error("'scoreRefs' must be a list of column ids.");
+  }
+
+  return {
+    stateMatrixRef,
+    filterRef,
+    selectedParentId,
+    scoreRefs: scoreRefs as SUniversalPColumnId[] | undefined,
+  };
 }
 
 // Identity (`name`/`version`) comes from this package's own `package.json`, so
