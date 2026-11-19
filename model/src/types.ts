@@ -133,6 +133,9 @@ export type BlockDataV5 = BlockData;
 /** Data version `v6`: today's shape; `v7` only rewrites chart states. */
 export type BlockDataV6 = BlockData;
 
+/** Data version `v7`: today's shape; `v8` only rewrites chart states. */
+export type BlockDataV7 = BlockData;
+
 /** Unified persisted data: workflow-relevant selections + UI view state. */
 export type BlockData = {
   // Block label shown as the subtitle. `customBlockLabel` is the user-renamed override;

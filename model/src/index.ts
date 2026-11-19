@@ -15,6 +15,7 @@ import {
   withErrorOpacityRange,
   withParentOnXAxis,
   withRegionColoursReseeded,
+  withStickyLayout,
   withYAnnotationTitleAtBottom,
 } from "./chart-state";
 import { dedupByLeafId, exactMatch, outputPColumns, poolSpecByRef } from "./render-utils";
@@ -40,6 +41,7 @@ import type {
   BlockDataV4,
   BlockDataV5,
   BlockDataV6,
+  BlockDataV7,
   LandscapePanel,
 } from "./types";
 
@@ -52,6 +54,7 @@ export {
   withErrorOpacityRange,
   withParentOnXAxis,
   withRegionColoursReseeded,
+  withStickyLayout,
   withYAnnotationTitleAtBottom,
 } from "./chart-state";
 // `createPlDataTableV3`'s return type reaches into `Nil` from helpers, and TS cannot name it
@@ -320,7 +323,7 @@ const dataModel = new DataModelBuilder({ kind })
     drillDownChartState: withYAnnotationTitleAtBottom(v5.drillDownChartState),
   }))
   // The reversed error opacity, on the landscape and drill-down charts.
-  .migrate<BlockData>("v7", (v6) => ({
+  .migrate<BlockDataV7>("v7", (v6) => ({
     ...v6,
     singleMutantHeatmapState: withErrorOpacityRange(v6.singleMutantHeatmapState),
     singleMutantHeatmapStates: Object.fromEntries(
@@ -330,6 +333,12 @@ const dataModel = new DataModelBuilder({ kind })
       ]),
     ),
     drillDownChartState: withErrorOpacityRange(v6.drillDownChartState),
+  }))
+  // Sticky axes and legend, no title in the chart, Y track titles on top: on every saved chart.
+  .migrate<BlockData>("v8", (v7) => ({
+    ...v7,
+    ...mapChartStates(v7, withStickyLayout),
+    drillDownChartState: withStickyLayout(v7.drillDownChartState),
   }))
   // The first four fields are the kind's init-params contract, and `.templateParams(...)`
   // below projects the same four back out. `params` is optional: a block may be created

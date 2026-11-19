@@ -9,6 +9,17 @@ import type { BlockData } from "./types";
 const ERROR_OPACITY_RANGE = { min: 1, max: 0.15 };
 
 /**
+ * How every chart of the block is laid out: axes and legend pinned while the map scrolls, no
+ * title drawn in the chart (the page's title line above it names it already), and the Y track
+ * titles on top, where the pinned header keeps them in view.
+ */
+const LAYOUT = {
+  title: { mode: "hidden" },
+  annotationTitlePosition: "top",
+  other: { stickyAxes: true, stickyLegend: true },
+} as const;
+
+/**
  * Default state for a mutation-landscape chart. Used by `init` for the placeholder and by the UI
  * for each score a run produces, so the two look alike.
  *
@@ -38,6 +49,8 @@ export function makeLandscapeChartState(
     },
     // Square cells. No `facetColumns`: no facets left to lay out.
     axesSettings: {
+      title: { ...LAYOUT.title },
+      other: { ...LAYOUT.other },
       axisX: {
         cellSize: 20,
         // Two-part labels ("32, D": position, then the residue it started as) are too wide to sit
@@ -47,8 +60,7 @@ export function makeLandscapeChartState(
       axisY: {
         hideAxisLabels: false,
         cellSize: 20,
-        // Below the plot, so the two Y-axis tracks are named without a band above the map.
-        annotationTitlePosition: "bottom",
+        annotationTitlePosition: LAYOUT.annotationTitlePosition,
       },
     },
   };
@@ -108,20 +120,7 @@ function withEmptyCellsShown(state: GraphMakerState): GraphMakerState {
 export function makeDrillDownChartState(): GraphMakerState {
   // Empty title on purpose. The page header already names the substitution and the score, and
   // graph-maker would print the same thing again directly beneath it.
-  const base = withEmptyCellsShown(makeLandscapeChartState("", null));
-  return {
-    ...base,
-    axesSettings: {
-      ...base.axesSettings,
-      // Hidden, not merely empty: an empty title still reserves its band above the plot, so the
-      // drill-down drew a blank strip between the PlBlockPage header and the map.
-      //
-      // Only here. A landscape page has NO PlBlockPage header — graph-maker's own title is its
-      // page heading, and MutationLandscapePage renders the score tabs into the title-line slot
-      // beside it. Hiding it there would take the heading and the tabs with it.
-      title: { ...base.axesSettings?.title, mode: "hidden" },
-    },
-  };
+  return withEmptyCellsShown(makeLandscapeChartState("", null));
 }
 
 /**
@@ -230,6 +229,27 @@ export function withErrorOpacityRange(state: GraphMakerState): GraphMakerState {
     layersSettings: {
       ...state.layersSettings,
       heatmap: { ...state.layersSettings?.heatmap, opacityRange: { ...ERROR_OPACITY_RANGE } },
+    },
+  };
+}
+
+/**
+ * Lays out a saved chart as new ones are (LAYOUT): sticky axes and legend, no title in the chart,
+ * Y track titles on top. Axes settings are seeded once, when a chart is created, so a saved chart
+ * keeps whatever it was created with.
+ *
+ * Hiding the title hides only the one drawn in the chart. The page's title line — the landscape's
+ * heading, with the click hint beside it — is graph-maker's own and stays.
+ */
+export function withStickyLayout(state: GraphMakerState): GraphMakerState {
+  const axes = state.axesSettings;
+  return {
+    ...state,
+    axesSettings: {
+      ...axes,
+      title: { ...axes?.title, ...LAYOUT.title },
+      other: { ...axes?.other, ...LAYOUT.other },
+      axisY: { ...axes?.axisY, annotationTitlePosition: LAYOUT.annotationTitlePosition },
     },
   };
 }

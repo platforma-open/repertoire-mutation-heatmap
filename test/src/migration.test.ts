@@ -11,6 +11,7 @@ import {
   withErrorOpacityRange,
   withParentOnXAxis,
   withRegionColoursReseeded,
+  withStickyLayout,
   withYAnnotationTitleAtBottom,
 } from "@platforma-open/milaboratories.repertoire-mutation-heatmap.model";
 import { describe, expect, test } from "vitest";
@@ -138,9 +139,55 @@ describe("withYAnnotationTitleAtBottom", () => {
   });
 });
 
-describe("Y annotation track title", () => {
-  test("new charts show the Y track titles at the bottom", () => {
-    expect(makeDrillDownChartState().axesSettings?.axisY?.annotationTitlePosition).toBe("bottom");
+describe("sticky layout", () => {
+  const charts = () => [makeLandscapeChartState("t", null), makeDrillDownChartState()];
+
+  test("new charts pin their axes and legend", () => {
+    for (const chart of charts()) {
+      expect(chart.axesSettings?.other).toMatchObject({ stickyAxes: true, stickyLegend: true });
+    }
+  });
+
+  test("new charts draw no title of their own and show the Y track titles on top", () => {
+    for (const chart of charts()) {
+      expect(chart.axesSettings?.title?.mode).toBe("hidden");
+      expect(chart.axesSettings?.axisY?.annotationTitlePosition).toBe("top");
+    }
+  });
+
+  test("a new landscape keeps its title: the page's title line shows it", () => {
+    expect(makeLandscapeChartState("Bin score", null).title).toBe("Bin score");
+  });
+
+  test("a saved chart gets the layout and keeps its other settings", () => {
+    const saved = {
+      ...savedChart([REGION]),
+      axesSettings: {
+        axisX: { cellSize: 20 },
+        axisY: { cellSize: 24, annotationTitlePosition: "bottom" },
+        title: { mode: "custom", value: "Mine" },
+        other: { frame: "none", stickyAxes: false },
+      },
+    } as unknown as GraphMakerState;
+    const state = withStickyLayout(saved);
+    expect(state.title).toBe("Gate rank mean (7.5)");
+    expect(state.axesSettings?.axisX?.cellSize).toBe(20);
+    expect(state.axesSettings?.axisY).toMatchObject({
+      cellSize: 24,
+      annotationTitlePosition: "top",
+    });
+    expect(state.axesSettings?.title).toMatchObject({ mode: "hidden", value: "Mine" });
+    expect(state.axesSettings?.other).toMatchObject({
+      frame: "none",
+      stickyAxes: true,
+      stickyLegend: true,
+    });
+  });
+
+  test("charts do not share the layout's objects, so editing one cannot move another", () => {
+    const [a, b] = [makeLandscapeChartState("a", null), makeLandscapeChartState("b", null)];
+    expect(a.axesSettings?.other).not.toBe(b.axesSettings?.other);
+    expect(a.axesSettings?.title).not.toBe(b.axesSettings?.title);
   });
 });
 
