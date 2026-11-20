@@ -1,5 +1,13 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.ui
 
+## 1.5.2
+
+### Patch Changes
+
+- e7ca577: Heatmaps keep their axes and legend pinned while scrolling (graph-maker 1.11.0), with no title drawn in the chart and the Y track titles on top; saved charts are migrated to the same layout
+- Updated dependencies [e7ca577]
+  - @platforma-open/milaboratories.repertoire-mutation-heatmap.model@1.5.2
+
 ## 1.5.1
 
 ### Patch Changes

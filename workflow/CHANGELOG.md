@@ -1,5 +1,7 @@
 # @platforma-open/milaboratories.repertoire-mutation-heatmap.workflow
 
+## 1.5.2
+
 ## 1.5.1
 
 ## 1.5.0
