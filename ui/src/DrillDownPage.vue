@@ -247,7 +247,7 @@ const fixedOptions = computed((): PredefinedGraphOption<"heatmap">[] | undefined
          object, deliberately, because they are the same chart with a different mutation pinned
          and a state each cost ~11 KB of block data on every write.
 
-         The chart's own title is empty (see makeDrillDownChartState) — the page title above
+         The chart draws no title of its own (see makeDrillDownChartState) — the page title above
          already names the substitution and the score. -->
     <GraphMaker
       v-else
