@@ -168,8 +168,8 @@ catalogs:
       specifier: ~2.29.8
       version: 2.29.8
     '@milaboratories/graph-maker':
-      specifier: 1.11.0
-      version: 1.11.0
+      specifier: 1.11.1
+      version: 1.11.1
     '@milaboratories/helpers':
       specifier: 1.14.7
       version: 1.14.7
@@ -314,7 +314,7 @@ importers:
     dependencies:
       '@milaboratories/graph-maker':
         specifier: 'catalog:'
-        version: 1.11.0(@milaboratories/pl-model-common@1.50.0)(@platforma-sdk/model@1.90.2)(@platforma-sdk/ui-vue@1.84.0(@bytecodealliance/preview2-shim@0.20.2)(@vue/compiler-dom@3.5.44)(@vue/server-renderer@3.5.44)(typescript@5.9.3))(d3-dispatch@3.0.1)(d3-path@3.1.0)(d3-scale-chromatic@3.1.0)(supports-color@8.1.1)(typescript@5.9.3)
+        version: 1.11.1(@milaboratories/pl-model-common@1.50.0)(@platforma-sdk/model@1.90.2)(@platforma-sdk/ui-vue@1.84.0(@bytecodealliance/preview2-shim@0.20.2)(@vue/compiler-dom@3.5.44)(@vue/server-renderer@3.5.44)(typescript@5.9.3))(d3-dispatch@3.0.1)(d3-path@3.1.0)(d3-scale-chromatic@3.1.0)(supports-color@8.1.1)(typescript@5.9.3)
       '@milaboratories/helpers':
         specifier: 'catalog:'
         version: 1.14.7
@@ -367,7 +367,7 @@ importers:
     dependencies:
       '@milaboratories/graph-maker':
         specifier: 'catalog:'
-        version: 1.11.0(@milaboratories/pl-model-common@1.50.0)(@platforma-sdk/model@1.90.2)(@platforma-sdk/ui-vue@1.90.8(@bytecodealliance/preview2-shim@0.30.0)(@vue/compiler-dom@3.5.44)(@vue/server-renderer@3.5.44)(typescript@5.9.3))(d3-dispatch@3.0.1)(d3-path@3.1.0)(d3-scale-chromatic@3.1.0)(supports-color@8.1.1)(typescript@5.9.3)
+        version: 1.11.1(@milaboratories/pl-model-common@1.50.0)(@platforma-sdk/model@1.90.2)(@platforma-sdk/ui-vue@1.90.8(@bytecodealliance/preview2-shim@0.30.0)(@vue/compiler-dom@3.5.44)(@vue/server-renderer@3.5.44)(typescript@5.9.3))(d3-dispatch@3.0.1)(d3-path@3.1.0)(d3-scale-chromatic@3.1.0)(supports-color@8.1.1)(typescript@5.9.3)
       '@platforma-open/milaboratories.repertoire-mutation-heatmap.model':
         specifier: workspace:*
         version: link:../model
@@ -1215,8 +1215,8 @@ packages:
     resolution: {integrity: sha512-IeGZU8XiN2tybg5Lv3g8B/ioSVrjC0RdeUrfjqNJL3c8RJM2H8s0prVv+pkF7iYjQrr0FCewIQhGP30WxKWBbw==}
     engines: {node: '>=24'}
 
-  '@milaboratories/graph-maker@1.11.0':
-    resolution: {integrity: sha512-RSm/5e0UpOln03+6Ry/8f/nWdlHtN844ju4DaOboihkwJVlsYewsujcITvbo1msDr1ZFcaBk9gj/u6I1Ekcu+g==}
+  '@milaboratories/graph-maker@1.11.1':
+    resolution: {integrity: sha512-eBiXhxN7y+ERuWHfGmSzAZGlo+fSDPDkwqXDLmR5nbsXjdDxsov0vvSvpNoe/02632C+O2xVJkBXAtdjCssehA==}
     peerDependencies:
       '@platforma-sdk/model': 1.84.0
       '@platforma-sdk/ui-vue': 1.84.0
@@ -1229,8 +1229,8 @@ packages:
     resolution: {integrity: sha512-Nc8cvo4c2mivHdceAODl/TCMU0mKhCHnCPmDrIuy5XxiqCpJ+BSxAc+UHbsVbOiahuPoocK+7U/rno/oTlM7Qg==}
     engines: {node: '>=24'}
 
-  '@milaboratories/miplots4@1.7.0':
-    resolution: {integrity: sha512-xWCNqBb8Ux0Rlca9slX6CW73ZmEr/KHTntIIC/drtIuyOqdH9UOchiJ0QkXpMsLZIsBAnoaN9WE1Ve47lPGTTQ==}
+  '@milaboratories/miplots4@1.7.1':
+    resolution: {integrity: sha512-sw6hLDOnX1u5d/FHHSnmnhkfRud6tlMnjyK4plIo2xz8j1wI4soI4xmx61XQ/CdrUO94NZ3heiVf2k6bP2rgfQ==}
 
   '@milaboratories/pf-driver@1.9.19':
     resolution: {integrity: sha512-wwW5XvSO4n6nZ12vSKY3Dge0PGOnJ0jHDUWoT5Yd1Xd6Gc70dUhTYPNY5oAnLl8S6r4uMRtJRudR2GvZo38P+A==}
@@ -7939,11 +7939,11 @@ snapshots:
       '@types/node': 24.19.2
       utility-types: 3.11.0
 
-  '@milaboratories/graph-maker@1.11.0(@milaboratories/pl-model-common@1.50.0)(@platforma-sdk/model@1.90.2)(@platforma-sdk/ui-vue@1.84.0(@bytecodealliance/preview2-shim@0.20.2)(@vue/compiler-dom@3.5.44)(@vue/server-renderer@3.5.44)(typescript@5.9.3))(d3-dispatch@3.0.1)(d3-path@3.1.0)(d3-scale-chromatic@3.1.0)(supports-color@8.1.1)(typescript@5.9.3)':
+  '@milaboratories/graph-maker@1.11.1(@milaboratories/pl-model-common@1.50.0)(@platforma-sdk/model@1.90.2)(@platforma-sdk/ui-vue@1.84.0(@bytecodealliance/preview2-shim@0.20.2)(@vue/compiler-dom@3.5.44)(@vue/server-renderer@3.5.44)(typescript@5.9.3))(d3-dispatch@3.0.1)(d3-path@3.1.0)(d3-scale-chromatic@3.1.0)(supports-color@8.1.1)(typescript@5.9.3)':
     dependencies:
       '@ag-grid-community/core': 32.3.9
       '@milaboratories/helpers': 1.14.7
-      '@milaboratories/miplots4': 1.7.0(d3-dispatch@3.0.1)(d3-path@3.1.0)(d3-scale-chromatic@3.1.0)(supports-color@8.1.1)
+      '@milaboratories/miplots4': 1.7.1(d3-dispatch@3.0.1)(d3-path@3.1.0)(d3-scale-chromatic@3.1.0)(supports-color@8.1.1)
       '@milaboratories/pf-plots': 1.9.0(@milaboratories/pl-model-common@1.50.0)(@platforma-sdk/model@1.90.2)
       '@platforma-sdk/model': 1.90.2
       '@platforma-sdk/ui-vue': 1.84.0(@bytecodealliance/preview2-shim@0.20.2)(@vue/compiler-dom@3.5.44)(@vue/server-renderer@3.5.44)(typescript@5.9.3)
@@ -7965,11 +7965,11 @@ snapshots:
       - supports-color
       - typescript
 
-  '@milaboratories/graph-maker@1.11.0(@milaboratories/pl-model-common@1.50.0)(@platforma-sdk/model@1.90.2)(@platforma-sdk/ui-vue@1.90.8(@bytecodealliance/preview2-shim@0.30.0)(@vue/compiler-dom@3.5.44)(@vue/server-renderer@3.5.44)(typescript@5.9.3))(d3-dispatch@3.0.1)(d3-path@3.1.0)(d3-scale-chromatic@3.1.0)(supports-color@8.1.1)(typescript@5.9.3)':
+  '@milaboratories/graph-maker@1.11.1(@milaboratories/pl-model-common@1.50.0)(@platforma-sdk/model@1.90.2)(@platforma-sdk/ui-vue@1.90.8(@bytecodealliance/preview2-shim@0.30.0)(@vue/compiler-dom@3.5.44)(@vue/server-renderer@3.5.44)(typescript@5.9.3))(d3-dispatch@3.0.1)(d3-path@3.1.0)(d3-scale-chromatic@3.1.0)(supports-color@8.1.1)(typescript@5.9.3)':
     dependencies:
       '@ag-grid-community/core': 32.3.9
       '@milaboratories/helpers': 1.14.7
-      '@milaboratories/miplots4': 1.7.0(d3-dispatch@3.0.1)(d3-path@3.1.0)(d3-scale-chromatic@3.1.0)(supports-color@8.1.1)
+      '@milaboratories/miplots4': 1.7.1(d3-dispatch@3.0.1)(d3-path@3.1.0)(d3-scale-chromatic@3.1.0)(supports-color@8.1.1)
       '@milaboratories/pf-plots': 1.9.0(@milaboratories/pl-model-common@1.50.0)(@platforma-sdk/model@1.90.2)
       '@platforma-sdk/model': 1.90.2
       '@platforma-sdk/ui-vue': 1.90.8(@bytecodealliance/preview2-shim@0.30.0)(@vue/compiler-dom@3.5.44)(@vue/server-renderer@3.5.44)(typescript@5.9.3)
@@ -7995,7 +7995,7 @@ snapshots:
 
   '@milaboratories/helpers@1.14.7': {}
 
-  '@milaboratories/miplots4@1.7.0(d3-dispatch@3.0.1)(d3-path@3.1.0)(d3-scale-chromatic@3.1.0)(supports-color@8.1.1)':
+  '@milaboratories/miplots4@1.7.1(d3-dispatch@3.0.1)(d3-path@3.1.0)(d3-scale-chromatic@3.1.0)(supports-color@8.1.1)':
     dependencies:
       '@d3fc/d3fc-chart': 5.1.9(d3-array@3.2.4)(d3-path@3.1.0)(d3-scale-chromatic@3.1.0)(d3-scale@4.0.2)(d3-selection@3.0.0)(d3-shape@3.2.0)
       '@d3fc/d3fc-pointer': 3.0.3(d3-dispatch@3.0.1)(d3-selection@3.0.0)

@@ -15,7 +15,7 @@ allowBuilds:
 catalog:
   "@platforma-sdk/model": 1.90.2
   "@platforma-sdk/ui-vue": 1.90.8
-  "@milaboratories/graph-maker": 1.11.0
+  "@milaboratories/graph-maker": 1.11.1
   "@platforma-sdk/workflow-tengo": 6.24.0
   "@platforma-sdk/block-kind": 1.1.1
   "@platforma-sdk/test": 1.90.12
